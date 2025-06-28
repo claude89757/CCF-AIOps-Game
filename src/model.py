@@ -39,7 +39,7 @@ class ModelClient:
     def chat(self, 
             messages: Union[List[Dict[str, str]], str],
             model: str = "deepseek-v3:671b",
-            temperature: float = 0.7,
+            temperature: float = 0.5,
             max_tokens: Optional[int] = None,
             system_prompt: Optional[str] = None,
             debug: bool = False,

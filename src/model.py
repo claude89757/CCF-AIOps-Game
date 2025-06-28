@@ -1,3 +1,12 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+@author: claude89757
+@date: 2025-06-28
+@description: 模型客户端
+"""
+
 import os
 import openai
 import json

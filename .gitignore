@@ -3,3 +3,4 @@
 .env
 *.pyc
 *.log
+/aiopschallenge2025-submission

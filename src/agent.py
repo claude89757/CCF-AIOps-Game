@@ -16,6 +16,8 @@ from datetime import datetime
 import os
 import logging
 import sys
+import time
+import numpy as np
 from pathlib import Path
 
 from src.model import ModelClient
@@ -51,11 +53,12 @@ class LoggerSetup:
     def setup_directories(self):
         """创建日志目录结构"""
         directories = [
-            self.base_dir / "diagnosis",    # 诊断过程日志
-            self.base_dir / "errors",       # 错误日志
-            self.base_dir / "interactions", # 智能体交互日志
-            self.base_dir / "tools",        # 工具执行日志
-            self.base_dir / "summary"       # 总结日志
+            self.base_dir / "diagnosis",        # 诊断过程日志
+            self.base_dir / "errors",           # 错误日志
+            self.base_dir / "interactions",     # 智能体交互日志
+            self.base_dir / "tools",            # 工具执行日志
+            self.base_dir / "summary",          # 总结日志
+            self.base_dir / "llm_interactions", # 大模型原始交互日志
         ]
         
         for directory in directories:
@@ -100,6 +103,13 @@ class LoggerSetup:
             self.base_dir / "summary" / f"summary_{timestamp}.log",
             level=logging.INFO
         )
+        
+        # 大模型原始交互日志
+        self.loggers['llm_interactions'] = self._create_logger(
+            'llm_interactions',
+            self.base_dir / "llm_interactions" / f"llm_interactions_{timestamp}.log",
+            level=logging.INFO
+        )
     
     def _create_logger(self, name: str, log_file: Path, level=logging.INFO):
         """创建单个日志记录器"""
@@ -118,11 +128,17 @@ class LoggerSetup:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.WARNING if name == 'error' else logging.CRITICAL)
         
-        # 格式器
-        formatter = logging.Formatter(
-            '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        # 格式器 - 对于LLM交互日志使用更简洁的格式
+        if name == 'llm_interactions':
+            formatter = logging.Formatter(
+                '%(asctime)s | %(levelname)s | %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+        else:
+            formatter = logging.Formatter(
+                '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
         
         file_handler.setFormatter(formatter)
         console_handler.setFormatter(formatter)
@@ -141,13 +157,14 @@ class LoggerSetup:
 class AIOpsReactAgent:
     """CCF AIOps挑战赛专用React模式故障诊断智能体"""
     
-    def __init__(self, model_name: str = "deepseek-v3:671b", max_iterations: int = 15):
+    def __init__(self, model_name: str = "deepseek-v3:671b", max_iterations: int = 15, max_model_retries: int = 3):
         """
         初始化Agent
         
         Args:
             model_name: 使用的模型名称
             max_iterations: 最大迭代次数，防止无限循环
+            max_model_retries: 模型调用最大重试次数
         """
         # 初始化日志系统
         self.logger_setup = LoggerSetup()
@@ -156,6 +173,7 @@ class AIOpsReactAgent:
         self.model_client = ModelClient()
         self.model_name = model_name
         self.max_iterations = max_iterations
+        self.max_model_retries = max_model_retries
         
         # 注册工具函数
         self.tools = self._register_tools()
@@ -175,6 +193,7 @@ class AIOpsReactAgent:
         self.loggers['summary'].info(f"模型: {model_name}")
         self.loggers['summary'].info(f"最大迭代次数: {max_iterations}")
         self.loggers['summary'].info(f"可用工具: {list(self.tools.keys())}")
+        self.loggers['summary'].info(f"模型重试次数: {max_model_retries}")
     
     def _register_tools(self) -> Dict[str, Callable]:
         """注册可用的工具函数"""
@@ -238,6 +257,65 @@ class AIOpsReactAgent:
         # 如果有案例特定的错误日志记录器，也记录到那里
         if self.case_error_logger:
             self.case_error_logger.error(f"案例 {uuid} 错误: {error_msg}")
+    
+    def _log_llm_interaction(self, iteration: int, uuid: str, input_messages: List[Dict[str, Any]], output_response: str, duration: float = 0, model_name: str = ""):
+        """记录大模型原始交互信息"""
+        separator = "=" * 100
+        
+        interaction_data = {
+            "interaction_id": f"{uuid}_{iteration}_{datetime.now().strftime('%H%M%S')}",
+            "timestamp": datetime.now().isoformat(),
+            "iteration": iteration,
+            "case_uuid": uuid,
+            "model": model_name,
+            "duration_seconds": round(duration, 3),
+            "input": {
+                "messages_count": len(input_messages),
+                "messages": input_messages,
+                "total_input_length": sum(len(str(msg.get('content', ''))) for msg in input_messages)
+            },
+            "output": {
+                "response": output_response,
+                "response_length": len(output_response)
+            }
+        }
+        
+        # 格式化JSON输出，确保中文显示正常
+        formatted_json = json.dumps(interaction_data, ensure_ascii=False, indent=2)
+        
+        # 记录到日志
+        self.loggers['llm_interactions'].info(f"\n{separator}")
+        self.loggers['llm_interactions'].info(f"LLM INTERACTION #{iteration} - CASE: {uuid}")
+        self.loggers['llm_interactions'].info(f"{separator}")
+        self.loggers['llm_interactions'].info(formatted_json)
+        self.loggers['llm_interactions'].info(f"{separator}\n")
+    
+    def _json_serialize_safe(self, obj: Any) -> Any:
+        """
+        安全的JSON序列化，处理numpy数组等特殊类型
+        
+        Args:
+            obj: 要序列化的对象
+            
+        Returns:
+            可序列化的对象
+        """
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, dict):
+            return {key: self._json_serialize_safe(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._json_serialize_safe(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return [self._json_serialize_safe(item) for item in obj]
+        else:
+            return obj
     
     def _discover_relevant_files(self, description: str, debug: bool = False) -> str:
         """
@@ -509,6 +587,81 @@ class AIOpsReactAgent:
         
         return parameters
     
+    def _call_model_with_retry(self, messages: List[Dict[str, Any]], max_retries: int = 3, retry_delay: float = 2.0, debug: bool = False) -> str:
+        """
+        带重试机制的模型调用
+        
+        Args:
+            messages: 消息列表
+            max_retries: 最大重试次数
+            retry_delay: 重试延迟（秒）
+            debug: 是否显示调试信息
+            
+        Returns:
+            模型响应
+            
+        Raises:
+            Exception: 重试耗尽后仍然失败
+        """
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    self.loggers['error'].warning(f"第 {attempt} 次重试模型调用...")
+                    if debug:
+                        print(f"🔄 第 {attempt} 次重试模型调用...")
+                    time.sleep(retry_delay * attempt)  # 指数退避
+                
+                response = self.model_client.chat(
+                    messages=messages,
+                    model=self.model_name,
+                    temperature=0.0,
+                    debug=debug
+                )
+                
+                if attempt > 0:
+                    self.loggers['error'].info(f"重试成功（第 {attempt} 次）")
+                    if debug:
+                        print(f"✅ 重试成功（第 {attempt} 次）")
+                
+                return response
+                
+            except Exception as e:
+                last_error = e
+                error_msg = str(e).lower()
+                
+                # 检查是否是可重试的错误
+                retryable_errors = [
+                    'connection error',
+                    'timeout',
+                    'ssl',
+                    'network',
+                    'rate limit',
+                    'server error',
+                    'service unavailable',
+                    'bad gateway',
+                    'gateway timeout'
+                ]
+                
+                is_retryable = any(err in error_msg for err in retryable_errors)
+                
+                if not is_retryable:
+                    self.loggers['error'].error(f"遇到不可重试的错误: {e}")
+                    raise e
+                
+                if attempt < max_retries:
+                    self.loggers['error'].warning(f"API调用失败 (第 {attempt + 1} 次尝试): {e}")
+                    if debug:
+                        print(f"⚠️ API调用失败 (第 {attempt + 1} 次尝试): {e}")
+                else:
+                    self.loggers['error'].error(f"API调用重试耗尽，最后错误: {e}")
+                    if debug:
+                        print(f"❌ API调用重试耗尽，最后错误: {e}")
+        
+        # 所有重试都失败了
+        raise last_error
+    
     def execute_tool(self, tool_call: ToolCall) -> Dict[str, Any]:
         """
         执行工具调用
@@ -571,28 +724,14 @@ class AIOpsReactAgent:
         else:
             # 成功执行
             if tool_call.name == "attempt_completion":
+                # 只有attempt_completion需要JSON格式处理
                 formatted_result += f"✅ {result.get('message', '任务完成')}\n"
                 if "result" in result:
                     formatted_result += f"结果: {json.dumps(result['result'], ensure_ascii=False, indent=2)}\n"
             else:
-                # 数据工具的结果
-                if "data" in result:
-                    data_count = len(result["data"])
-                    formatted_result += f"✅ 成功获取 {data_count} 条数据\n"
-                    formatted_result += f"形状: {result.get('shape', 'N/A')}\n"
-                    formatted_result += f"列名: {result.get('columns', [])}\n"
-                    formatted_result += f"估算Token数: {result.get('estimated_tokens', 'N/A')}\n"
-                    
-                    # 显示部分数据样例
-                    if data_count > 0:
-                        formatted_result += f"数据样例 (前2条):\n"
-                        for i, record in enumerate(result["data"][:2]):
-                            formatted_result += f"  {i+1}. {json.dumps(record, ensure_ascii=False)}\n"
-                else:
-                    # 预览结果或其他结果
-                    for key, value in result.items():
-                        if key not in ["data", "error"]:
-                            formatted_result += f"{key}: {value}\n"
+                # 其他工具直接显示原始返回结果
+                formatted_result += f"✅ 工具执行成功\n"
+                formatted_result += f"原始返回结果:\n{str(result)}\n"
         
         formatted_result += "=" * 50 + "\n"
         return formatted_result
@@ -677,12 +816,28 @@ class AIOpsReactAgent:
                     # 记录模型交互
                     self._log_model_interaction(iteration, len(messages), 0)
                     
-                    # 获取模型响应，设置temperature=0确保稳定性
-                    response = self.model_client.chat(
+                    # 记录LLM调用开始时间
+                    llm_start_time = datetime.now()
+                    
+                    # 使用带重试机制的模型调用
+                    response = self._call_model_with_retry(
                         messages=messages,
-                        model=self.model_name,
-                        temperature=0.0,  # 比赛要求稳定输出
+                        max_retries=self.max_model_retries,
+                        retry_delay=2.0,
                         debug=debug
+                    )
+                    
+                    # 计算LLM调用耗时
+                    llm_duration = (datetime.now() - llm_start_time).total_seconds()
+                    
+                    # 记录LLM原始交互信息
+                    self._log_llm_interaction(
+                        iteration=iteration,
+                        uuid=uuid,
+                        input_messages=messages,
+                        output_response=response,
+                        duration=llm_duration,
+                        model_name=self.model_name
                     )
                     
                     # 更新交互日志
@@ -757,7 +912,13 @@ class AIOpsReactAgent:
                     if debug:
                         import traceback
                         traceback.print_exc()
-                    break
+                    
+                    # 如果是早期错误（前3轮），尝试继续
+                    if iteration <= 3:
+                        self.loggers['diagnosis'].warning("早期错误，尝试继续执行...")
+                        continue
+                    else:
+                        break
             
             # 达到最大迭代次数或其他原因结束
             result_summary = {
@@ -916,8 +1077,12 @@ class AIOpsReactAgent:
 
 def main():
     """主函数 - 比赛模式"""
-    # 创建智能体
-    agent = AIOpsReactAgent(model_name="deepseek-v3:671b", max_iterations=12)
+    # 创建智能体，增加重试机制
+    agent = AIOpsReactAgent(
+        model_name="deepseek-v3:671b", 
+        max_iterations=25,
+        max_model_retries=3  # 模型调用重试3次
+    )
     
     print("🏆 CCF AIOps挑战赛故障诊断智能体")
     print("=" * 80)

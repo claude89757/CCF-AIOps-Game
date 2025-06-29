@@ -73,29 +73,34 @@ Usage:
 
 **Critical Usage Guidelines:**
 - If data exceeds 10K tokens, tool returns optimization suggestions instead of data
-- Start with small data sets: use nrows parameter (e.g., 100-500 rows)
+- Start with reasonable data sets: use nrows parameter (e.g., 200-800 rows)
 - Filter by time window: {'filters': [('@timestamp', '>', '2025-06-06 10:00:00')]}
 - Filter by service: {'filters': [('k8_namespace', '==', 'hipstershop')]}
 - Filter by log level: {'filters': [('level', '==', 'ERROR')]}
 - Select essential columns only: {'columns': ['timestamp', 'level', 'message']}
-- Combine filters for precision: {'filters': [('k8_namespace', '==', 'hipstershop'), ('level', '==', 'ERROR')], 'nrows': 200}
+- Combine filters for precision: {'filters': [('k8_namespace', '==', 'hipstershop'), ('level', '==', 'ERROR')], 'nrows': 500}
 
-**Common Filter Examples:**
+**Valid Filter Operators and Examples:**
 ```python
-# Time-based filtering
-{'filters': [('@timestamp', '>', '2025-06-06 10:00:00')]}
+# ✅ SUPPORTED operators: ==, !=, <, <=, >, >=, in, not in
 
-# Service-specific logs
+**Time-based filtering**
+{'filters': [('@timestamp', '>', '2025-06-06 10:00:00')]}
+{'filters': [('@timestamp', '>=', '2025-06-06 16:10:00'), ('@timestamp', '<=', '2025-06-06 16:31:00')]}
+
+**Service-specific logs**
 {'filters': [('k8_namespace', '==', 'hipstershop')]}
 
-# Error logs only  
-{'filters': [('level', '==', 'ERROR')]}
+**Multiple exact matches using 'in'**
+{'filters': [('k8_pod', 'in', ['frontend-abc123', 'cartservice-def456'])]}
 
-# Pod-specific analysis
-{'filters': [('k8_pod', 'like', 'cartservice*')]}
+**Combined filtering (recommended)**
+{'filters': [('k8_namespace', '==', 'hipstershop'), ('@timestamp', '>', '2025-06-06 16:00:00')], 'nrows': 100, 'columns': ['@timestamp', 'k8_pod', 'message']}
 
-# Combined filtering (recommended)
-{'filters': [('k8_namespace', '==', 'hipstershop'), ('level', '==', 'ERROR')], 'nrows': 100, 'columns': ['@timestamp', 'message']}
+**❌ UNSUPPORTED operators that will cause errors:**
+- 'like': Use exact match with 'in' operator instead
+- 'contains': Use exact match or read data and filter in Python
+- 'ilike', 'regex', 'match': Not supported by parquet filters
 ```
 
 ## attempt_completion
@@ -167,6 +172,35 @@ Usage:
   - Any other relevant feedback or information related to the tool use.
 6. Proceed autonomously through tool usage, advancing to the next analysis step based on each tool's execution results without waiting for user confirmation. Focus on systematic fault diagnosis using monitoring data analysis.
 
+# Intelligent Error Handling
+
+**Auto-Recovery Features:**
+The tools have built-in intelligent error handling with automatic fallback strategies:
+
+- **Filter Error Recovery**: When parquet filters fail with "Malformed filters" error, the system automatically:
+  1. Attempts to fix common issues (invalid operators, timestamp formats)
+  2. Falls back to simplified filters or no filters
+  3. Switches to preview mode if all else fails
+  4. Provides specific suggestions for parameter correction
+
+- **Parameter Validation**: Automatic validation and correction of:
+  - Unsupported operators (like→==, contains→removed)
+  - Timestamp format issues (Z suffix, microsecond precision)
+  - Column name problems and data type mismatches
+  - Excessive row limits and memory constraints
+
+- **Progressive Fallback**: When tool execution fails, automatic progression through:
+  1. Parameter correction and retry
+  2. Simplified parameter set
+  3. Alternative tool usage (get_data→preview)
+  4. Graceful degradation with partial results
+
+**Best Practices for Error Resilience:**
+- When you encounter tool errors, review the error message and suggestion provided
+- If a fallback was used (indicated by `fallback_used: true`), note the strategy and adjust future calls accordingly
+- Continue analysis with available data rather than stopping on single tool failures
+- Use the error suggestions to refine subsequent tool calls
+
 
 ====
 
@@ -208,7 +242,7 @@ RULES
 - Use tools sequentially one at a time, waiting for tool execution results before proceeding to the next step
 - Always start with `preview_parquet_in_pd` to understand data structure, then use `get_data_from_parquet` for specific data
 - When using `get_data_from_parquet`, always apply appropriate filtering conditions to avoid loading oversized datasets
-- Specify reasonable `nrows` limits (recommended 100-500 rows) and relevant column filtering for each data query
+- Specify reasonable `nrows` limits (recommended 200-800 rows) and relevant column filtering for each data query
 - Always start fault analysis from the temporal dimension to determine the fault occurrence time window
 - Analyze according to system architecture layers: Infrastructure → Application → Business
 - Prioritize analyzing error-level logs and abnormal metrics, then expand to warnings and other levels

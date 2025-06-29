@@ -35,6 +35,19 @@ class ModelClient:
             api_key=self.api_key,
             base_url=self.base_url
         )
+        
+        # 尝试设置调试日志记录器（如果日志系统可用）
+        try:
+            import sys
+            # 添加src目录到path以便导入 - 不需要重新import os
+            src_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src')
+            if src_path not in sys.path:
+                sys.path.insert(0, src_path)
+            from log_system import LoggerSetup
+            logger_setup = LoggerSetup()
+            self._debug_logger = logger_setup.loggers.get('interaction')
+        except (ImportError, Exception):
+            self._debug_logger = None
     
     def chat(self, 
             messages: Union[List[Dict[str, str]], str],
@@ -74,11 +87,25 @@ class ModelClient:
         
         # 添加系统提示（R1类模型不建议使用）
         if system_prompt:
-            if is_reasoning_model and debug:
-                print(f"[警告] {model} 不建议使用system_prompt，可能影响推理效果")
+            if is_reasoning_model:
+                warning_msg = f"[警告] {model} 不建议使用system_prompt，可能影响推理效果"
+                # 始终记录警告到日志
+                if hasattr(self, '_debug_logger') and self._debug_logger:
+                    self._debug_logger.warning(warning_msg)
+                if debug:
+                    print(warning_msg)
             formatted_messages.insert(0, {"role": "system", "content": system_prompt})
         
-        # 调试信息
+        # 始终记录请求信息到日志，无论是否debug
+        if hasattr(self, '_debug_logger') and self._debug_logger:
+            self._debug_logger.info(f"使用模型: {model}")
+            self._debug_logger.info(f"模型类型: {'思考类型模型' if is_reasoning_model else '常规模型'}")
+            self._debug_logger.info(f"温度: {temperature}")
+            self._debug_logger.info(f"最大Token: {max_tokens or '默认'}")
+            self._debug_logger.info(f"消息数量: {len(formatted_messages)}")
+            self._debug_logger.debug(f"请求消息:\n{json.dumps(formatted_messages, ensure_ascii=False, indent=2)}")
+        
+        # 控制台调试信息（仅在debug模式显示）
         if debug:
             print(f"[调试] 使用模型: {model}")
             print(f"[调试] 模型类型: {'思考类型模型' if is_reasoning_model else '常规模型'}")
@@ -128,9 +155,23 @@ class ModelClient:
             
             answer_content = response.choices[0].message.content or ""
             
-            # 调试信息
+            # 始终记录调试信息到日志文件，无论是否debug模式
+            duration = end_time - start_time
+            if hasattr(self, '_debug_logger') and self._debug_logger:
+                self._debug_logger.info(f"模型调用时间: {duration:.2f}秒")
+                if hasattr(response, 'usage'):
+                    usage = response.usage
+                    self._debug_logger.info(f"Token使用: {usage.total_tokens} (输入: {usage.prompt_tokens}, 输出: {usage.completion_tokens})")
+                
+                if reasoning_content and is_reasoning_model:
+                    self._debug_logger.info(f"思考过程长度: {len(reasoning_content)} 字符")
+                    self._debug_logger.info(f"最终回答长度: {len(answer_content)} 字符")
+                    # 记录完整思考过程到调试日志
+                    self._debug_logger.debug(f"完整思考过程:\n{reasoning_content}")
+                    self._debug_logger.debug(f"最终回答:\n{answer_content}")
+            
+            # 控制台调试信息（仅在debug模式显示）
             if debug:
-                duration = end_time - start_time
                 print(f"[调试] 响应时间: {duration:.2f}秒")
                 if hasattr(response, 'usage'):
                     usage = response.usage
@@ -138,7 +179,7 @@ class ModelClient:
                 
                 if reasoning_content and is_reasoning_model:
                     print(f"[调试] 思考过程长度: {len(reasoning_content)} 字符")
-                    print(f"[调试] 思考过程预览: {reasoning_content[:100]}...")
+                    print(f"[调试] 思考过程预览: {reasoning_content[:500]}{'...' if len(reasoning_content) > 500 else ''}")
                     print(f"[调试] 最终回答: {answer_content}")
                 print("-" * 50)
             
@@ -151,9 +192,18 @@ class ModelClient:
                 return answer_content
                 
         except Exception as e:
+            # 始终记录API调用失败到日志
+            if hasattr(self, '_debug_logger') and self._debug_logger:
+                self._debug_logger.error(f"API 调用失败: {e}")
+                # 记录完整异常信息
+                import traceback
+                full_traceback = traceback.format_exc()
+                self._debug_logger.debug(f"API调用异常堆栈:\n{full_traceback}")
+            
             if debug:
                 print(f"[调试] API 调用失败: {e}")
-            print(f"API 调用失败: {e}")
+            else:
+                print(f"❌ API调用失败")
             raise
 
     def chat_completion(self, 
@@ -183,7 +233,7 @@ class ModelClient:
             )
             return response
         except Exception as e:
-            print(f"API 调用失败: {e}")
+            print(f"❌ API调用失败")
             raise
     
     def simple_query(self, prompt: str, model: str = "deepseek-v3:671b") -> str:
@@ -330,7 +380,7 @@ if __name__ == "__main__":
                 return_reasoning=True
             )
             print("思考过程:")
-            print(reasoning[:200] + "..." if len(reasoning) > 200 else reasoning)
+            print(reasoning[:1000] + "..." if len(reasoning) > 1000 else reasoning)
             print(f"\n最终回答: {answer}\n")
             
             # 第二轮 - 多轮对话（注意：只添加content到历史，不添加reasoning）

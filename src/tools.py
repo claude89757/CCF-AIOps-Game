@@ -57,8 +57,8 @@ def preview_parquet_in_pd(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         # 检查文件是否存在
         if not os.path.exists(file_path):
             return {
-                "error": f"文件不存在: {file_path}",
-                "suggestion": "请检查文件路径是否正确"
+                "error": f"File not found: {file_path}",
+                "suggestion": "Please check if the file path is correct"
             }
         
         # 读取数据（先读取完整数据，然后取前几行用于预览）
@@ -75,26 +75,26 @@ def preview_parquet_in_pd(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         preview_info = {
             "file_path": file_path,
             "file_size_mb": round(file_size_mb, 2),
-            "shape": f"({df.shape[0]} rows × {df.shape[1]} columns) - 仅显示前{preview_rows}行",
+            "shape": f"({df.shape[0]} rows × {df.shape[1]} columns) - Only showing first {preview_rows} rows",
             "columns": list(df.columns),
             "dtypes": df.dtypes.astype(str).to_dict(),
             "sample_data": df.to_dict(orient='records'),
             "memory_usage_mb": round(df.memory_usage(deep=True).sum() / (1024 * 1024), 3),
             "null_counts": df.isnull().sum().to_dict(),
-            "ai_tips": "这是数据预览，如需完整数据请使用get_data_from_parquet函数"
+            "ai_tips": "This is a data preview. Use get_data_from_parquet function for complete data"
         }
         
         # 如果文件较大，添加警告
         if file_size_mb > 50:
-            preview_info["warning"] = f"文件较大({file_size_mb:.1f}MB)，建议使用参数限制读取数据量"
+            preview_info["warning"] = f"Large file ({file_size_mb:.1f}MB), recommend using parameters to limit data reading"
         
         return preview_info
         
     except Exception as e:
         return {
-            "error": f"读取文件失败: {str(e)}",
+            "error": f"Failed to read file: {str(e)}",
             "file_path": file_path,
-            "suggestion": "请检查文件格式或使用正确的pd_read_kwargs参数"
+            "suggestion": "Please check file format or use correct pd_read_kwargs parameters"
         }
 
 
@@ -116,8 +116,8 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         # 检查文件是否存在
         if not os.path.exists(file_path):
             return {
-                "error": f"文件不存在: {file_path}",
-                "suggestion": "请检查文件路径是否正确"
+                "error": f"File not found: {file_path}",
+                "suggestion": "Please check if the file path is correct"
             }
         
         # 获取文件大小
@@ -165,13 +165,13 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         if estimated_tokens > max_tokens:
             result.update({
                 "data_too_large": True,
-                "error": f"数据量过大，估算约{estimated_tokens}个token，超过{max_tokens}token限制",
-                "suggestion": "请调整过滤条件以减少数据量，建议操作：",
+                "error": f"Data too large, estimated {estimated_tokens} tokens, exceeds {max_tokens} token limit",
+                "suggestion": "Please adjust filter conditions to reduce data size, recommended actions:",
                 "optimization_tips": [
-                    "1. 使用 nrows 参数限制行数，如: {'nrows': 100}",
-                    "2. 使用 columns 参数只读取需要的列，如: {'columns': ['timestamp', 'message']}",
-                    "3. 使用 filters 参数过滤数据，如: {'filters': [('level', '==', 'ERROR')]}",
-                    "4. 组合使用多个条件：{'nrows': 200, 'columns': ['time', 'level', 'message']}"
+                    "1. Use nrows parameter to limit rows, e.g.: {'nrows': 100}",
+                    "2. Use columns parameter to read only needed columns, e.g.: {'columns': ['timestamp', 'message']}",
+                    "3. Use filters parameter to filter data, e.g.: {'filters': [('level', '==', 'ERROR')]}",
+                    "4. Combine multiple conditions: {'nrows': 200, 'columns': ['time', 'level', 'message']}"
                 ],
                 "current_row_count": df.shape[0],
                 "current_column_count": df.shape[1],
@@ -185,16 +185,16 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         
         # 根据数据量添加相应的提示
         if df.shape[0] > 500:
-            result["ai_warning"] = f"数据量较大({df.shape[0]}行)，可能影响AI处理效率"
-            result["suggestion"] = "建议使用nrows参数限制行数，或使用columns参数只读取需要的列"
+            result["ai_warning"] = f"Large dataset ({df.shape[0]} rows), may affect AI processing efficiency"
+            result["suggestion"] = "Recommend using nrows parameter to limit rows, or columns parameter to read only needed columns"
         
         if memory_mb > 5:
-            result["memory_warning"] = f"内存使用较高({memory_mb:.1f}MB)"
-            result["suggestion"] = "建议减少数据量或分批处理"
+            result["memory_warning"] = f"High memory usage ({memory_mb:.1f}MB)"
+            result["suggestion"] = "Recommend reducing data size or processing in batches"
         
         if suggested_limit:
-            result["auto_limit_applied"] = f"文件较大，自动限制为前{nrows_limit}行"
-            result["suggestion"] = "如需更多数据，请在pd_read_kwargs中指定nrows参数"
+            result["auto_limit_applied"] = f"Large file, automatically limited to first {nrows_limit} rows"
+            result["suggestion"] = "If you need more data, please specify nrows parameter in pd_read_kwargs"
         
         # 为AI智能体提供数据理解辅助信息
         if df.shape[1] > 0:
@@ -215,9 +215,9 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         
     except Exception as e:
         return {
-            "error": f"读取文件失败: {str(e)}",
+            "error": f"Failed to read file: {str(e)}",
             "file_path": file_path,
-            "suggestion": "请检查文件格式、路径或调整pd_read_kwargs参数"
+            "suggestion": "Please check file format, path or adjust pd_read_kwargs parameters"
         }
 
 

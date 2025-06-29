@@ -203,7 +203,7 @@ class ModelClient:
             if debug:
                 print(f"[调试] API 调用失败: {e}")
             else:
-                print(f"❌ API调用失败")
+                print(f"❌ API调用失败: {e}")
             raise
 
     def chat_completion(self, 
@@ -233,7 +233,7 @@ class ModelClient:
             )
             return response
         except Exception as e:
-            print(f"❌ API调用失败")
+            print(f"❌ API调用失败:{e}")
             raise
     
     def simple_query(self, prompt: str, model: str = "deepseek-v3:671b") -> str:

@@ -235,9 +235,8 @@ class ToolExecutor:
         
         # 格式化结果
         if "error" in result:
-            formatted_result += f"❌ Error: {result['error']}\n"
-            if "suggestion" in result:
-                formatted_result += f"💡 Suggestion: {result['suggestion']}\n"
+            formatted_result += f"❌ Tool execution failed: {result['error']}\n"
+            formatted_result += f"<tool_result>\n{result}\n</tool_result>\n"
         else:
             # 成功执行
             if tool_call.name == "attempt_completion":
@@ -246,59 +245,7 @@ class ToolExecutor:
                 if "result" in result:
                     formatted_result += f"Result: {json.dumps(result['result'], ensure_ascii=False, indent=2)}\n"
             else:
-                # 其他工具需要智能压缩结果
                 formatted_result += f"✅ Tool execution successful\n"
-                
-                # 智能格式化关键信息
-                if "data_too_large" in result:
-                    formatted_result += f"⚠️ Data too large: {result.get('error', '')}\n"
-                    formatted_result += f"Suggestion: {result.get('optimization_tips', [])[:2]}\n"
-                elif "data" in result:
-                    # 有实际数据，显示关键信息
-                    data_info = f"数据形状: {result.get('shape', 'N/A')}\n"
-                    data_info += f"估算tokens: {result.get('estimated_tokens', 'N/A')}\n"
-                    
-                    # 只显示前几条数据
-                    data = result.get("data", [])
-                    if data:
-                        data_info += f"Data example (first 3 rows): {data[:3]}\n"
-                    
-                    formatted_result += data_info
-                else:
-                    # 其他结果信息，进行压缩
-                    result_str = str(result)
-                    compressed_result = self._compress_tool_result(result_str)
-                    formatted_result += f"Raw return result:\n{compressed_result}\n"
+                formatted_result += f"<tool_result>\n{result}\n</tool_result>\n"
         
-        formatted_result += "=" * 50 + "\n"
         return formatted_result
-    
-    def _compress_tool_result(self, result_text: str, max_tokens: int = None) -> str:
-        """压缩工具执行结果，保留关键信息"""
-        if max_tokens is None:
-            max_tokens = self.config.max_token_limit
-            
-        estimated_tokens = len(result_text) // self.config.token_estimation_ratio
-        
-        if estimated_tokens <= max_tokens:
-            return result_text
-        
-        # 提取关键信息
-        lines = result_text.split('\n')
-        compressed_lines = []
-        
-        # 保留标题行和错误信息
-        for line in lines[:5]:  # 前5行通常包含重要信息
-            compressed_lines.append(line)
-        
-        # 查找并保留包含关键词的行
-        key_indicators = ['error', '错误', 'failed', '失败', 'success', '成功', 'shape', 'token', 'data']
-        for line in lines[5:]:
-            if any(indicator in line.lower() for indicator in key_indicators):
-                compressed_lines.append(line)
-        
-        # 添加压缩提示
-        newline = '\n'
-        compressed_lines.append(f"... [Result compressed, original length {estimated_tokens} tokens, compressed length {len(newline.join(compressed_lines))//self.config.token_estimation_ratio} tokens]")
-        
-        return '\n'.join(compressed_lines) 

@@ -643,18 +643,12 @@ Please start the analysis.
                     results.append(diagnosis_result["result"])
                     successful_count += 1
                     success_msg = f"案例 {case['uuid']} 诊断完成"
-                    if debug:
-                        print(f"✅ {success_msg}")
-                    else:
-                        print("✅")
+                    print(f"✅ {success_msg}")
                     self.loggers['summary'].info(success_msg)
                 else:
                     failed_count += 1
                     fail_msg = f"案例 {case['uuid']} 诊断失败: {diagnosis_result.get('reason', '未知原因')}"
-                    if debug:
-                        print(f"❌ {fail_msg}")
-                    else:
-                        print("❌")
+                    print(f"❌ {fail_msg}")
                     self.loggers['summary'].error(fail_msg)
                     
                     # 为失败的案例生成一个基本结果，避免丢失
@@ -674,11 +668,7 @@ Please start the analysis.
                     results.append(fallback_result)
                 
             except Exception as e:
-                error_msg = f"处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
-                if debug:
-                    print(f"❌ {error_msg}")
-                else:
-                    print("❌")
+            
                 self.loggers['summary'].error(error_msg)
                 self.loggers['interaction'].error(error_msg)  # 也记录到交互日志
                 self.error_handler.log_error_with_context(e, f"处理案例 {case.get('uuid', 'unknown')}")
@@ -689,9 +679,10 @@ Please start the analysis.
                 full_traceback = traceback.format_exc()
                 self.loggers['interaction'].debug(f"处理案例异常堆栈:\n{full_traceback}")
                 
-                if debug:
-                    traceback.print_exc()
-        
+                error_msg = f"处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
+                print(f"❌ {error_msg}")
+                traceback.print_exc()
+
         # 保存结果
         try:
             with open(output_file, 'w', encoding='utf-8') as f:

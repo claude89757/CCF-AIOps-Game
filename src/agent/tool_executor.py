@@ -236,7 +236,9 @@ class ToolExecutor:
         # 格式化结果
         if "error" in result:
             formatted_result += f"❌ Tool execution failed: {result['error']}\n"
-            formatted_result += f"<tool_result>\n{result}\n</tool_result>\n"
+            # 限制错误信息的长度，避免过长的堆栈跟踪
+            error_info = {k: v for k, v in result.items() if k in ['error', 'suggestion', 'optimization_tips']}
+            formatted_result += f"<tool_result>\n{error_info}\n</tool_result>\n"
         else:
             # 成功执行
             if tool_call.name == "attempt_completion":
@@ -246,6 +248,56 @@ class ToolExecutor:
                     formatted_result += f"Result: {json.dumps(result['result'], ensure_ascii=False, indent=2)}\n"
             else:
                 formatted_result += f"✅ Tool execution successful\n"
-                formatted_result += f"<tool_result>\n{result}\n</tool_result>\n"
+                
+                # 智能压缩大型结果 - 只显示关键信息
+                compressed_result = self._compress_tool_result(result)
+                formatted_result += f"<tool_result>\n{compressed_result}\n</tool_result>\n"
         
         return formatted_result
+    
+    def _compress_tool_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        压缩工具结果，只保留关键信息
+        
+        Args:
+            result: 原始工具结果
+            
+        Returns:
+            压缩后的结果
+        """
+        compressed = {}
+        
+        # 始终保留的关键字段
+        key_fields = ['file_path', 'shape', 'columns', 'estimated_tokens', 'actual_rows_read']
+        for field in key_fields:
+            if field in result:
+                compressed[field] = result[field]
+        
+        # 有条件保留的字段
+        if 'data' in result:
+            data = result['data']
+            if isinstance(data, list) and len(data) > 0:
+                # 只显示前2条记录和总数
+                compressed['data_sample'] = data[:2]
+                compressed['total_records'] = len(data)
+                compressed['note'] = f"Showing first 2 of {len(data)} records"
+            else:
+                compressed['data'] = data
+        
+        # 保留警告和建议
+        warning_fields = ['ai_warning', 'memory_warning', 'suggestion', 'auto_limit_applied']
+        for field in warning_fields:
+            if field in result:
+                compressed[field] = result[field]
+        
+        # 压缩统计信息
+        if 'numeric_summary' in result:
+            # 只保留count和mean，忽略详细统计
+            summary = result['numeric_summary']
+            if isinstance(summary, dict):
+                compressed['numeric_summary'] = {
+                    col: {'count': col_stats.get('count'), 'mean': col_stats.get('mean')} 
+                    for col, col_stats in summary.items()
+                }
+        
+        return compressed

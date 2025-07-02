@@ -65,7 +65,7 @@ def preview_parquet_in_pd(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         df = pd.read_parquet(file_path, **pd_read_kwargs)
         
         # 限制预览行数
-        preview_rows = 5
+        preview_rows = 3
         df = df.head(preview_rows)
         
         # 获取文件大小
@@ -130,7 +130,7 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         
         # 如果没有指定行数限制且文件较大，设置默认限制
         if nrows_limit is None and file_size_mb > 10:
-            nrows_limit = 1000
+            nrows_limit = 800  # 从1000改为800，更严格的限制
             suggested_limit = True
         
         # 读取数据
@@ -148,7 +148,7 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         
         # 估算token数量
         estimated_tokens = estimate_tokens(data_dict)
-        max_tokens = 10000  # 最大token限制
+        max_tokens = 6000  # 大幅降低最大token限制，从10000改为6000
         
         # 构建返回信息
         result = {
@@ -175,7 +175,7 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
                 ],
                 "current_row_count": df.shape[0],
                 "current_column_count": df.shape[1],
-                "recommended_max_rows": min(500, max_tokens // (len(df.columns) * 10))  # 粗略估算建议行数
+                "recommended_max_rows": min(300, max_tokens // (len(df.columns) * 12))  # 更保守的建议行数，从500改为300，从10改为12
             })
             # 不返回实际数据
             return result
@@ -184,11 +184,11 @@ def get_data_from_parquet(file_path: str, pd_read_kwargs: dict = {}) -> Dict[str
         result["data"] = data_dict
         
         # 根据数据量添加相应的提示
-        if df.shape[0] > 500:
+        if df.shape[0] > 300:  # 从500改为300，更早警告
             result["ai_warning"] = f"Large dataset ({df.shape[0]} rows), may affect AI processing efficiency"
             result["suggestion"] = "Recommend using nrows parameter to limit rows, or columns parameter to read only needed columns"
         
-        if memory_mb > 5:
+        if memory_mb > 3:  # 从5改为3，更早警告
             result["memory_warning"] = f"High memory usage ({memory_mb:.1f}MB)"
             result["suggestion"] = "Recommend reducing data size or processing in batches"
         
@@ -337,9 +337,10 @@ if __name__ == "__main__":
     print("-" * 40)
     
     # 单独测试一个文件
-    result = preview_parquet_in_pd('data/2025-06-06/log-parquet/log_filebeat-server_2025-06-06_03-00-00.parquet')
+    result = preview_parquet_in_pd('data/processed_data/2025-06-05/log-parquet/log_filebeat-server_2025-06-05.parquet')
     print("预览结果:")
     print(json.dumps(result, indent=2, ensure_ascii=False))
+
 
 
 """

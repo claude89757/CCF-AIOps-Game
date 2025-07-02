@@ -4,7 +4,7 @@
 """
 @author: claude89757
 @date: 2025-06-29
-@description: 文件发现器
+@description: 文件发现器 - 适配预处理后的数据结构
 """
 
 import os
@@ -26,7 +26,8 @@ class FileDiscovery:
     
     def discover_relevant_files(self, description: str, debug: bool = False) -> str:
         """
-        从故障描述中提取时间窗口并发现相关文件，智能处理时间不匹配问题
+        从故障描述中提取时间窗口并发现相关文件
+        现在数据已预处理，时间戳和文件夹日期一致（UTC时区）
         
         Args:
             description: 故障描述
@@ -82,8 +83,8 @@ class FileDiscovery:
         available_dates = self._get_available_dates()
         
         # 检查目标日期数据是否存在
-        data_dir = f"{self.config.data_base_path}/{start_date}"
-        if not os.path.exists(data_dir):
+        processed_data_dir = f"{self.config.data_base_path}/processed_data/{start_date}"
+        if not os.path.exists(processed_data_dir):
             # 智能选择最接近的日期
             if available_dates:
                 best_match_date = self._find_best_matching_date(start_date, available_dates)
@@ -100,16 +101,16 @@ Adjusted time window: {adjusted_start} to {adjusted_end}
 
 💡 **Analysis suggestions**:
 1. Use the adjusted time window for analysis
-2. Note that timestamp fields may use different dates
+2. Data is now UTC-aligned, so timestamps match folder dates
 3. Focus on fault patterns rather than specific time points
 
 Available dates: {', '.join(available_dates)}
-Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
+Recommended data directory: {self.config.data_base_path}/processed_data/{best_match_date}/"""
             else:
                 return "⚠️ No monitoring data found."
         
         # 发现具体文件
-        log_files, metric_files, trace_files = self._scan_files_in_directory(data_dir)
+        log_files, metric_files, trace_files = self._scan_files_in_directory(processed_data_dir)
         
         self.loggers['diagnosis'].info(f"Found {len(log_files)} logs, {len(metric_files)} metrics, {len(trace_files)} traces")
         
@@ -121,8 +122,8 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
         self.loggers['diagnosis'].info(f"提取到日期: {target_date}")
         
         # 检查该日期的数据是否存在
-        data_dir = f"{self.config.data_base_path}/{target_date}"
-        if not os.path.exists(data_dir):
+        processed_data_dir = f"{self.config.data_base_path}/processed_data/{target_date}"
+        if not os.path.exists(processed_data_dir):
             # 查找可用的日期
             available_dates = self._get_available_dates()
             
@@ -137,7 +138,7 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
     def _get_available_dates(self) -> List[str]:
         """获取所有可用的数据日期"""
         available_dates = []
-        pattern = f"{self.config.data_base_path}/2025-*"
+        pattern = f"{self.config.data_base_path}/processed_data/2025-*"
         for date_dir in glob.glob(pattern):
             if os.path.isdir(date_dir):
                 date_name = os.path.basename(date_dir)
@@ -168,7 +169,7 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
             return available_dates[0] if available_dates else target_date
     
     def _scan_files_in_directory(self, data_dir: str) -> tuple:
-        """扫描目录中的文件"""
+        """扫描目录中的文件 - 适配新的数据结构"""
         log_files = []
         metric_files = []
         trace_files = []
@@ -181,22 +182,30 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
         trace_pattern = f"{data_dir}/trace-parquet/*.parquet"
         trace_files = sorted(glob.glob(trace_pattern))
         
-        # 发现指标文件（更复杂的结构）
-        apm_patterns = [
-            f"{data_dir}/metric-parquet/apm/*.parquet",
-            f"{data_dir}/metric-parquet/apm/*/*.parquet"
-        ]
-        for pattern in apm_patterns:
-            metric_files.extend(glob.glob(pattern))
+        # 发现指标文件 - 新的扁平化结构
+        # APM指标
+        apm_pattern = f"{data_dir}/apm/*.parquet"
+        metric_files.extend(glob.glob(apm_pattern))
         
+        # Pod指标
+        pod_pattern = f"{data_dir}/pod/*.parquet"
+        metric_files.extend(glob.glob(pod_pattern))
+        
+        # Service指标
+        service_pattern = f"{data_dir}/service/*.parquet"
+        metric_files.extend(glob.glob(service_pattern))
+        
+        # 基础设施指标
         infra_patterns = [
-            f"{data_dir}/metric-parquet/infra/*.parquet",
-            f"{data_dir}/metric-parquet/infra/*/*.parquet"
+            f"{data_dir}/infra_node/*.parquet",
+            f"{data_dir}/infra_pod/*.parquet",
+            f"{data_dir}/infra_tidb/*.parquet"
         ]
         for pattern in infra_patterns:
             metric_files.extend(glob.glob(pattern))
         
-        other_pattern = f"{data_dir}/metric-parquet/other/*.parquet"
+        # 其他指标
+        other_pattern = f"{data_dir}/other/*.parquet"
         metric_files.extend(glob.glob(other_pattern))
         
         metric_files = sorted(metric_files)
@@ -207,7 +216,7 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
                          log_files: List[str], metric_files: List[str], trace_files: List[str]) -> str:
         """格式化文件信息"""
         file_info_parts = [
-            "## Available monitoring data files",
+            "## Available monitoring data files (UTC-aligned)",
             f"Time window: {start_time} to {end_time}",
             f"Related date: {start_date}",
             f"File statistics: {len(log_files)} logs, {len(metric_files)} metrics, {len(trace_files)} traces"
@@ -218,22 +227,58 @@ Recommended data directory: {self.config.data_base_path}/{best_match_date}/"""
             for log_file in log_files[:self.config.preview_rows]:
                 file_info_parts.append(f"- {log_file}")
             if len(log_files) > self.config.preview_rows:
-                file_info_parts.append(f"- ... and {len(log_files)} more logs")
+                file_info_parts.append(f"- ... and {len(log_files) - self.config.preview_rows} more logs")
         
         if trace_files:
             file_info_parts.append("\n### Trace files:")
             for trace_file in trace_files[:self.config.preview_rows]:
                 file_info_parts.append(f"- {trace_file}")
             if len(trace_files) > self.config.preview_rows:
-                file_info_parts.append(f"- ... and {len(trace_files)} more traces")
+                file_info_parts.append(f"- ... and {len(trace_files) - self.config.preview_rows} more traces")
         
         if metric_files:
             file_info_parts.append("\n### Metric files:")
-            for metric_file in metric_files[:8]:
-                file_info_parts.append(f"- {metric_file}")
-            if len(metric_files) > 8:
-                file_info_parts.append(f"- ... and {len(metric_files)} more metrics")
+            # 按类型分组显示指标文件
+            metric_groups = self._group_metric_files(metric_files)
+            for group_name, files in metric_groups.items():
+                file_info_parts.append(f"\n#### {group_name} ({len(files)} files):")
+                for file in files[:3]:  # 每组显示前3个文件
+                    file_info_parts.append(f"- {file}")
+                if len(files) > 3:
+                    file_info_parts.append(f"- ... and {len(files) - 3} more")
         
-        file_info_parts.append("\n💡 Tip: Use preview_parquet_in_pd tool to preview file structure, then use get_data_from_parquet to get specific data.")
+        file_info_parts.append("\n💡 **Data is now UTC-aligned**: Timestamps in files match folder dates")
+        file_info_parts.append("💡 **Next steps**: Use preview_parquet_in_pd tool to preview file structure, then use get_data_from_parquet to get specific data.")
         
-        return "\n".join(file_info_parts) 
+        return "\n".join(file_info_parts)
+    
+    def _group_metric_files(self, metric_files: List[str]) -> Dict[str, List[str]]:
+        """将指标文件按类型分组"""
+        groups = {
+            "APM Metrics": [],
+            "Pod Metrics": [],
+            "Service Metrics": [],
+            "Infrastructure Node": [],
+            "Infrastructure Pod": [],
+            "Infrastructure TiDB": [],
+            "Other Metrics": []
+        }
+        
+        for file in metric_files:
+            if "/apm/" in file:
+                groups["APM Metrics"].append(file)
+            elif "/pod/" in file:
+                groups["Pod Metrics"].append(file)
+            elif "/service/" in file:
+                groups["Service Metrics"].append(file)
+            elif "/infra_node/" in file:
+                groups["Infrastructure Node"].append(file)
+            elif "/infra_pod/" in file:
+                groups["Infrastructure Pod"].append(file)
+            elif "/infra_tidb/" in file:
+                groups["Infrastructure TiDB"].append(file)
+            elif "/other/" in file:
+                groups["Other Metrics"].append(file)
+        
+        # 移除空组
+        return {k: v for k, v in groups.items() if v} 

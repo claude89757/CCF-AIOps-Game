@@ -37,6 +37,7 @@ class ContextManager:
         """智能管理上下文长度，避免超限"""
         current_tokens = self.estimate_message_tokens(messages)
         
+        # 更严格的压缩策略 - 降低阈值
         if current_tokens <= self.context_compress_threshold:
             return messages
         
@@ -46,19 +47,33 @@ class ContextManager:
         if len(messages) < 4:
             return messages
         
-        # 保留前2条消息（系统提示+初始任务）
-        preserved_messages = messages[:2]
-        recent_messages = messages[-4:]  # 保留最近4条消息
-        
-        # 压缩中间的历史消息
-        middle_messages = messages[2:-4]
-        if middle_messages:
-            # 提取关键步骤信息
-            compressed_history = self._extract_key_analysis_steps(middle_messages)
-            preserved_messages.append({
-                "role": "assistant",
-                "content": f"[历史分析压缩]: {compressed_history}"
-            })
+        # 更激进的压缩策略
+        if current_tokens > self.max_context_tokens * 0.95:  # 如果超过95%，更激进压缩
+            # 只保留系统提示和最近2条消息
+            preserved_messages = messages[:1]  # 只保留系统提示
+            recent_messages = messages[-2:]    # 只保留最近2条消息
+            
+            # 添加简化的历史摘要
+            if len(messages) > 3:
+                compressed_history = "已完成多轮分析，正在诊断故障原因..."
+                preserved_messages.append({
+                    "role": "assistant", 
+                    "content": f"[历史分析压缩]: {compressed_history}"
+                })
+        else:
+            # 标准压缩策略
+            preserved_messages = messages[:2]  # 保留前2条消息（系统提示+初始任务）
+            recent_messages = messages[-3:]    # 保留最近3条消息，从4改为3
+            
+            # 压缩中间的历史消息
+            middle_messages = messages[2:-3]
+            if middle_messages:
+                # 提取关键步骤信息
+                compressed_history = self._extract_key_analysis_steps(middle_messages)
+                preserved_messages.append({
+                    "role": "assistant",
+                    "content": f"[历史分析压缩]: {compressed_history}"
+                })
         
         # 组合最终消息
         final_messages = preserved_messages + recent_messages
@@ -88,10 +103,10 @@ class ContextManager:
     
     def compress_for_context_limit(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """针对上下文长度错误进行更激进的压缩"""
-        if len(messages) > 3:
-            # 只保留系统提示和最近2条消息
-            compressed = [messages[0]] + messages[-2:]
-            self.loggers['error'].info(f"已压缩到{len(compressed)}条消息，继续重试...")
+        if len(messages) > 2:
+            # 更激进的压缩 - 只保留系统提示和最近1条消息
+            compressed = [messages[0]] + messages[-1:]
+            self.loggers['error'].info(f"激进压缩：已压缩到{len(compressed)}条消息，继续重试...")
             return compressed
         else:
             # 已经压缩到最小，返回原消息

@@ -50,6 +50,8 @@ def main():
                        help='手动指定最大上下文长度')
     parser.add_argument('--temperature', type=float,
                        help='手动指定模型温度')
+    parser.add_argument('--concurrency', '-c', type=int, default=10,
+                       help='并发处理数量 (默认: 10, 设置为1表示串行处理)')
     
     args = parser.parse_args()
     
@@ -58,6 +60,7 @@ def main():
         'model_name': args.model,
         'max_iterations': args.iterations,
         'max_model_retries': args.retries,
+        'concurrency': args.concurrency,
     }
     
     if args.context_length is not None:
@@ -72,14 +75,18 @@ def main():
     print(f"🤖 使用模型: {args.model}")
     print(f"🔄 最大迭代次数: {args.iterations}")
     print(f"🔁 最大重试次数: {args.retries}")
-    print("🐛 调试模式: 开启")
+    print(f"⚡ 并发数量: {args.concurrency}")
+    print(f"🔧 处理模式: {'串行' if args.concurrency == 1 else '并行'}")
+    print(f"🐛 调试模式: {'开启' if args.debug else '关闭'}")
     print("=" * 80)
 
     # 处理所有故障案例
     result = agent.process_input_json(
         input_file=args.input,
         output_file=args.output, 
-        debug=args.debug
+        debug=args.debug,
+        use_parallel=args.concurrency > 1,
+        concurrency=args.concurrency
     )
     
     if result["status"] == "completed":

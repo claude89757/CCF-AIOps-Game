@@ -27,34 +27,35 @@ export BASE_URL="https://uni-api.cstcloud.cn/v1"
 
 ### 直接运行
 ```bash
-# 直接调用智能体
-python -c "
-from src.agent import AIOpsReactAgent
-agent = AIOpsReactAgent(model_name='deepseek-v3:671b', max_iterations=12)
-result = agent.process_input_json('input.json', 'answer.json')
-print(f'成功率: {result[\"success_rate\"]:.1f}%')
-"
+
+# 使用命令行参数
+python src/agent_run.py --model deepseek-v3:671b --concurrency 15 --input input.json --output answer.json
+
+# 串行处理（设置并发为1）
+python src/agent_run.py --concurrency 1 --input input.json --output answer.json
+
+# 调试模式下的并行处理
+python src/agent_run.py --debug --concurrency 5 --input input.json --output answer.json
 ```
 
-## 📁 项目结构
+### 命令行参数说明
 
-```
-CCF-AIOps-Game/
-├── README.md           # 项目说明文档（本文件）
-├── domain.conf         # 外网域名配置文件
-├── src/                # 核心代码目录
-│   ├── agent.py        # AIOpsReactAgent核心类
-│   ├── model.py        # 模型客户端
-│   ├── prompt.py       # 比赛优化的系统提示词
-│   └── tools.py        # 数据分析工具
-├── data/              # 监控数据目录
-│   ├── 2025-06-06/    # 按日期组织的数据
-│   ├── 2025-06-07/
-│   └── ...
-├── input.json         # 比赛输入文件（846个案例）
-├── answer.json        # 比赛输出文件（运行后生成）
+```bash
+python src/agent_run.py [options]
 
-├── Dockerfile         # Docker构建文件
-├── run.sh            # 一键运行脚本
-└── requirements.txt   # Python依赖
+必选参数:
+  无（使用默认值）
+
+可选参数:
+  -h, --help            显示帮助信息
+  -m, --model {deepseek-v3:671b,qwen3:235b,deepseek-r1:671b-0528}
+                        指定使用的模型 (默认: deepseek-v3:671b)
+  -i, --iterations INT  最大迭代次数 (默认: 30)
+  -r, --retries INT     模型调用最大重试次数 (默认: 5)
+  -c, --concurrency INT 并发处理数量 (默认: 10, 设置为1表示串行处理)
+  --input FILE          输入文件路径 (默认: input.json)
+  --output FILE         输出文件路径 (默认: answer.json)
+  --debug               开启调试模式
+  --context-length INT  手动指定最大上下文长度
+  --temperature FLOAT   手动指定模型温度
 ```

@@ -1,0 +1,15 @@
+[
+  {
+    "uuid": "test-detailed-001",
+    "component": "unknown",
+    "reason": "analysis_failed",
+    "time": "2025-06-06 12:00:00",
+    "reasoning_trace": [
+      {
+        "step": 1,
+        "action": "DiagnosisAttempt",
+        "observation": "Automatic diagnosis failed, requires manual investigation"
+      }
+    ]
+  }
+]

@@ -10,8 +10,11 @@
 import re
 import json
 import time
+import concurrent.futures
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -42,7 +45,8 @@ class AIOpsReactAgent:
     MODEL_CONFIGS = AgentConfig().MODEL_CONFIGS
     
     def __init__(self, model_name: str = "deepseek-v3:671b", max_iterations: int = 15, max_model_retries: int = 3, 
-                 max_context_length: Optional[int] = None, temperature: Optional[float] = None):
+                 max_context_length: Optional[int] = None, temperature: Optional[float] = None,
+                 concurrency: int = None):
         """
         初始化Agent
         
@@ -52,11 +56,18 @@ class AIOpsReactAgent:
             max_model_retries: 模型调用最大重试次数
             max_context_length: 模型支持的最大上下文长度（tokens），如果为None则使用模型的建议配置
             temperature: 模型生成温度，0.0为确定性输出，值越高随机性越强，如果为None则使用模型的建议配置
+            concurrency: 并发处理数量，如果为None则使用配置默认值
         """
         # 初始化配置
         self.config = AgentConfig()
         self.config.max_iterations = max_iterations
         self.config.max_model_retries = max_model_retries
+        
+        # 设置并发数量
+        if concurrency is not None:
+            self.concurrency = self.config.validate_concurrency(concurrency)
+        else:
+            self.concurrency = self.config.concurrency
         
         # 自动配置模型参数
         model_config = self.config.get_model_config(model_name)
@@ -100,6 +111,7 @@ class AIOpsReactAgent:
         
         self.loggers['summary'].info(f"模型配置: 最大上下文长度={self.max_context_length:,}tokens ({context_source}), 温度={self.temperature} ({temp_source})")
         self.loggers['summary'].info(f"最大迭代次数: {self.config.max_iterations}")
+        self.loggers['summary'].info(f"并发处理数量: {self.concurrency}")
         self.loggers['summary'].info(f"可用工具: {list(self.tool_executor.tools.keys())}")
         self.loggers['summary'].info(f"模型重试次数: {self.config.max_model_retries}")
         self.loggers['summary'].info(f"上下文管理: 最大{self.context_manager.max_context_tokens}tokens，压缩阈值{self.context_manager.context_compress_threshold}tokens，工具结果限制{self.context_manager.max_tool_result_tokens}tokens")
@@ -408,6 +420,9 @@ Please start the analysis.
             
             iteration = 0
             final_result = None
+            interrupt_reason = None  # 跟踪中断的具体原因
+            successful_iterations = 0  # 成功执行的轮数
+            failed_iterations = 0  # 失败的轮数
             
             while iteration < self.config.max_iterations:
                 iteration += 1
@@ -417,6 +432,8 @@ Please start the analysis.
                 
                 if debug:
                     print(f"\n🔄 第 {iteration} 轮推理...")
+                else:
+                    print(f"🔄 第{iteration}轮", end="", flush=True)
                 
                 try:
                     # 上下文管理 - 在调用模型前进行上下文长度检查和压缩
@@ -461,6 +478,9 @@ Please start the analysis.
                     
                     if not tool_calls:
                         warning_msg = "未检测到工具调用，任务可能已完成或存在问题"
+                        interrupt_reason = f"第{iteration}轮未检测到工具调用"
+                        # 这轮API调用成功了，但是解析工具调用失败
+                        successful_iterations += 1
                         self.loggers['diagnosis'].warning(warning_msg)
                         self.loggers['interaction'].warning(warning_msg)  # 也记录到交互日志
                         if debug:
@@ -535,6 +555,9 @@ Please start the analysis.
                     messages.append({"role": "assistant", "content": response})
                     messages.append({"role": "user", "content": f"Tool execution results:\n{tool_results_text}\nContinue analysis."})
                     
+                    # 这轮执行成功
+                    successful_iterations += 1
+                    
                 except Exception as e:
                     error_msg = f"第 {iteration} 轮执行出错: {e}"
                     self.loggers['diagnosis'].error(error_msg)
@@ -553,6 +576,9 @@ Please start the analysis.
                     if debug:
                         traceback.print_exc()
                     
+                    # 这轮执行失败
+                    failed_iterations += 1
+                    
                     # 如果是早期错误（前3轮），尝试继续
                     if iteration <= 3:
                         continue_msg = "早期错误，尝试继续执行..."
@@ -560,15 +586,26 @@ Please start the analysis.
                         self.loggers['interaction'].warning(continue_msg)
                         continue
                     else:
+                        interrupt_reason = f"第{iteration}轮出现异常: {str(e)}"
                         break
             
             # 达到最大迭代次数或其他原因结束
+            if iteration >= self.config.max_iterations:
+                if failed_iterations > successful_iterations:
+                    failure_reason = f"API连续失败导致迭代耗尽 (成功{successful_iterations}轮/失败{failed_iterations}轮)"
+                else:
+                    failure_reason = f"达到最大迭代次数 (成功{successful_iterations}轮/失败{failed_iterations}轮)"
+            elif interrupt_reason:
+                failure_reason = f"{interrupt_reason} (成功{successful_iterations}轮/失败{failed_iterations}轮)"
+            else:
+                failure_reason = f"未知原因导致执行中断 (成功{successful_iterations}轮/失败{failed_iterations}轮)"
+                
             result_summary = {
                 "status": "incomplete",
                 "result": final_result,
                 "steps": self.steps,
                 "iterations": iteration,
-                "reason": "达到最大迭代次数" if iteration >= self.config.max_iterations else "执行中断"
+                "reason": failure_reason
             }
             
             self.loggers['diagnosis'].warning(f"诊断未完成: {result_summary['reason']}")
@@ -583,9 +620,283 @@ Please start the analysis.
                 "iterations": 0
             }
     
-    def process_input_json(self, input_file: str = "input.json", output_file: str = "answer.json", debug: bool = False) -> Dict[str, Any]:
+    def _diagnose_case_with_index(self, case_with_index: Tuple[int, Dict[str, str]], debug: bool = False) -> Tuple[int, Dict[str, Any]]:
+        """
+        带索引的单个案例诊断方法，用于并行处理
+        
+        Args:
+            case_with_index: (索引, 案例数据) 元组
+            debug: 是否显示调试信息
+            
+        Returns:
+            (索引, 诊断结果) 元组
+        """
+        index, case = case_with_index
+        
+        # 为每个线程创建独立的日志记录器
+        thread_id = threading.current_thread().ident
+        
+        try:
+            # 在非debug模式下也显示开始信息
+            if not debug:
+                print(f"🔍 开始处理案例: {case.get('uuid', 'unknown')}")
+            
+            # 诊断单个案例
+            diagnosis_result = self.diagnose_single_case(case, debug=debug)
+            
+            return index, {
+                "diagnosis_result": diagnosis_result,
+                "case": case,
+                "thread_id": thread_id
+            }
+            
+        except Exception as e:
+            # 记录线程级别的错误
+            error_msg = f"线程 {thread_id} 处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
+            self.loggers['summary'].error(error_msg)
+            
+            # 添加控制台打印
+            print(f"❌ 案例 {case.get('uuid', 'unknown')} 处理异常: {str(e)[:50]}...")
+            
+            return index, {
+                "diagnosis_result": {
+                    "status": "error", 
+                    "error": str(e),
+                    "steps": [],
+                    "iterations": 0
+                },
+                "case": case,
+                "thread_id": thread_id,
+                "error": str(e)
+            }
+    
+    def process_input_json_parallel(self, input_file: str = "input.json", output_file: str = "answer.json", 
+                                  debug: bool = False, concurrency: int = None) -> Dict[str, Any]:
+        """
+        并行处理input.json文件中的所有故障案例，生成answer.json
+        
+        Args:
+            input_file: 输入文件路径
+            output_file: 输出文件路径
+            debug: 是否显示调试信息
+            concurrency: 并发数量，如果为None则使用实例配置
+            
+        Returns:
+            处理结果统计
+        """
+        # 使用指定的并发数量或实例配置
+        actual_concurrency = concurrency if concurrency is not None else self.concurrency
+        actual_concurrency = self.config.validate_concurrency(actual_concurrency)
+        
+        print(f"🚀 开始并行处理故障案例（并发数：{actual_concurrency}）")
+        if debug:
+            print(f"输入文件: {input_file}")
+            print(f"输出文件: {output_file}")
+            print("=" * 80)
+        
+        self.loggers['summary'].info("=" * 80)
+        self.loggers['summary'].info("开始并行处理 CCF AIOps 挑战赛故障案例")
+        self.loggers['summary'].info(f"输入文件: {input_file}")
+        self.loggers['summary'].info(f"输出文件: {output_file}")
+        self.loggers['summary'].info(f"并发数量: {actual_concurrency}")
+        self.loggers['summary'].info("=" * 80)
+        
+        # 读取输入文件
+        try:
+            with open(input_file, 'r', encoding='utf-8') as f:
+                cases = json.load(f)
+        except Exception as e:
+            error_msg = f"读取输入文件失败: {e}"
+            print(f"❌ 读取输入文件失败")
+            self.loggers['summary'].error(error_msg)
+            self.error_handler.log_error_with_context(e, "读取输入文件")
+            return {"status": "error", "error": str(e)}
+        
+        print(f"📊 共 {len(cases)} 个案例")
+        self.loggers['summary'].info(f"共发现 {len(cases)} 个故障案例")
+        
+        # 准备案例数据（添加索引）
+        cases_with_index = [(i, case) for i, case in enumerate(cases)]
+        
+        # 初始化结果容器
+        results = [None] * len(cases)  # 保证结果按原顺序排列
+        successful_count = 0
+        failed_count = 0
+        completed_count = 0
+        
+        # 并行处理锁
+        progress_lock = threading.Lock()
+        
+        def update_progress(future):
+            """更新进度的回调函数"""
+            nonlocal completed_count, successful_count, failed_count
+            
+            try:
+                index, result_data = future.result()
+                diagnosis_result = result_data["diagnosis_result"]
+                case = result_data["case"]
+                
+                with progress_lock:
+                    completed_count += 1
+                    
+                    if diagnosis_result["status"] == "completed" and diagnosis_result.get("result"):
+                        results[index] = diagnosis_result["result"]
+                        successful_count += 1
+                        success_msg = f"案例 {case['uuid']} 诊断完成"
+                        if debug:
+                            print(f"✅ {success_msg} ({completed_count}/{len(cases)})")
+                        else:
+                            print("✅", end="", flush=True)
+                        self.loggers['summary'].info(success_msg)
+                    else:
+                        failed_count += 1
+                        fail_reason = diagnosis_result.get('reason', diagnosis_result.get('error', '未知原因'))
+                        fail_msg = f"案例 {case['uuid']} 诊断失败: {fail_reason}"
+                        if debug:
+                            print(f"❌ {fail_msg} ({completed_count}/{len(cases)})")
+                        else:
+                            # 在非debug模式下也显示具体的失败原因
+                            print(f"❌ 案例 {case['uuid']} 诊断失败: {fail_reason}")
+                        self.loggers['summary'].error(fail_msg)
+                        
+                        # 为失败的案例生成一个基本结果
+                        fallback_result = {
+                            "uuid": case["uuid"],
+                            "component": "unknown",
+                            "reason": "analysis_failed", 
+                            "time": "2025-06-06 12:00:00",
+                            "reasoning_trace": [
+                                {
+                                    "step": 1,
+                                    "action": "DiagnosisAttempt",
+                                    "observation": "Automatic diagnosis failed, requires manual investigation"
+                                }
+                            ]
+                        }
+                        results[index] = fallback_result
+                        
+            except Exception as e:
+                with progress_lock:
+                    completed_count += 1
+                    failed_count += 1
+                # 尝试获取案例信息
+                try:
+                    case_info = future_to_case.get(future, {})
+                    case_uuid = case_info.get('uuid', 'unknown') if isinstance(case_info, dict) else 'unknown'
+                except:
+                    case_uuid = 'unknown'
+                
+                error_msg = f"处理案例 {case_uuid} 结果时出错: {e}"
+                print(f"❌ {error_msg}")
+                self.loggers['summary'].error(error_msg)
+        
+        # 使用ThreadPoolExecutor进行并行处理
+        print(f"⚡ 开始并行处理...")
+        start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=actual_concurrency) as executor:
+            # 提交所有任务
+            future_to_case = {
+                executor.submit(self._diagnose_case_with_index, case_with_index, debug): case_with_index[1]
+                for case_with_index in cases_with_index
+            }
+            
+            # 添加回调函数处理结果
+            for future in future_to_case:
+                future.add_done_callback(update_progress)
+            
+            # 等待所有任务完成
+            concurrent.futures.wait(future_to_case)
+        
+        processing_time = time.time() - start_time
+        
+        # 过滤掉None结果
+        final_results = [result for result in results if result is not None]
+        
+        # 保存结果
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(final_results, f, ensure_ascii=False, indent=2)
+            save_msg = f"结果已保存到 {output_file}"
+            if debug:
+                print(f"\n✅ {save_msg}")
+            else:
+                print(f"\n✅ 已保存到 {output_file}")
+            self.loggers['summary'].info(save_msg)
+        except Exception as e:
+            error_msg = f"保存结果失败: {e}"
+            if debug:
+                print(f"❌ {error_msg}")
+            else:
+                print(f"❌ 保存失败")
+            self.loggers['summary'].error(error_msg)
+            self.error_handler.log_error_with_context(e, "保存结果")
+            return {"status": "error", "error": f"保存失败: {str(e)}"}
+        
+        # 返回统计结果
+        summary = {
+            "status": "completed",
+            "total_cases": len(cases),
+            "successful_cases": successful_count,
+            "failed_cases": failed_count,
+            "success_rate": successful_count / len(cases) * 100,
+            "output_file": output_file,
+            "processing_time": processing_time,
+            "concurrency": actual_concurrency,
+            "cases_per_second": len(cases) / processing_time if processing_time > 0 else 0
+        }
+        
+        if debug:
+            print(f"\n{'='*80}")
+            print(f"📊 并行处理完成统计:")
+            print(f"总案例数: {summary['total_cases']}")
+            print(f"成功案例: {summary['successful_cases']}")
+            print(f"失败案例: {summary['failed_cases']}")
+            print(f"成功率: {summary['success_rate']:.1f}%")
+            print(f"处理时间: {summary['processing_time']:.2f}秒")
+            print(f"并发数: {summary['concurrency']}")
+            print(f"处理速度: {summary['cases_per_second']:.2f}案例/秒")
+            print(f"{'='*80}")
+        else:
+            print(f"\n📊 完成: 成功{summary['successful_cases']}/{summary['total_cases']} ({summary['success_rate']:.1f}%) - {summary['processing_time']:.1f}秒")
+        
+        # 记录最终统计信息
+        self.loggers['summary'].info("=" * 80)
+        self.loggers['summary'].info("并行处理完成统计:")
+        self.loggers['summary'].info(f"总案例数: {summary['total_cases']}")
+        self.loggers['summary'].info(f"成功案例: {summary['successful_cases']}")
+        self.loggers['summary'].info(f"失败案例: {summary['failed_cases']}")
+        self.loggers['summary'].info(f"成功率: {summary['success_rate']:.1f}%")
+        self.loggers['summary'].info(f"处理时间: {summary['processing_time']:.2f}秒")
+        self.loggers['summary'].info(f"并发数: {summary['concurrency']}")
+        self.loggers['summary'].info(f"处理速度: {summary['cases_per_second']:.2f}案例/秒")
+        self.loggers['summary'].info("=" * 80)
+        
+        return summary
+    
+    def process_input_json(self, input_file: str = "input.json", output_file: str = "answer.json", 
+                          debug: bool = False, use_parallel: bool = True, concurrency: int = None) -> Dict[str, Any]:
         """
         处理input.json文件中的所有故障案例，生成answer.json
+        
+        Args:
+            input_file: 输入文件路径
+            output_file: 输出文件路径
+            debug: 是否显示调试信息
+            use_parallel: 是否使用并行处理（默认True）
+            concurrency: 并发数量（仅在use_parallel=True时有效）
+            
+        Returns:
+            处理结果统计
+        """
+        if use_parallel:
+            return self.process_input_json_parallel(input_file, output_file, debug, concurrency)
+        else:
+            return self._process_input_json_serial(input_file, output_file, debug)
+    
+    def _process_input_json_serial(self, input_file: str = "input.json", output_file: str = "answer.json", debug: bool = False) -> Dict[str, Any]:
+        """
+        串行处理input.json文件中的所有故障案例，生成answer.json
         
         Args:
             input_file: 输入文件路径
@@ -668,7 +979,8 @@ Please start the analysis.
                     results.append(fallback_result)
                 
             except Exception as e:
-            
+                error_msg = f"处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
+                
                 self.loggers['summary'].error(error_msg)
                 self.loggers['interaction'].error(error_msg)  # 也记录到交互日志
                 self.error_handler.log_error_with_context(e, f"处理案例 {case.get('uuid', 'unknown')}")
@@ -679,9 +991,9 @@ Please start the analysis.
                 full_traceback = traceback.format_exc()
                 self.loggers['interaction'].debug(f"处理案例异常堆栈:\n{full_traceback}")
                 
-                error_msg = f"处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
                 print(f"❌ {error_msg}")
-                traceback.print_exc()
+                if debug:
+                    traceback.print_exc()
 
         # 保存结果
         try:

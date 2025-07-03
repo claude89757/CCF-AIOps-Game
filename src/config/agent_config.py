@@ -36,7 +36,11 @@ class AgentConfig:
     
     # 重试配置
     retry_delay: float = 2.0  # 重试延迟（秒）
-    max_retry_attempts: int = 5  # 最大重试次数
+    max_retry_attempts: int = 10  # 最大重试次数
+    
+    # 并发处理配置
+    concurrency: int = 10  # 默认并发数量
+    max_concurrency: int = 20  # 最大并发数量限制
     
     # Token管理配置 - 更严格的token限制
     max_token_limit: int = 6000  # 大幅降低工具数据最大token限制，从10000改为6000
@@ -96,4 +100,12 @@ class AgentConfig:
     
     def get_problematic_columns(self) -> list:
         """获取可能有问题的列名"""
-        return ['level', 'severity', 'log_level'] 
+        return ['level', 'severity', 'log_level']
+    
+    def validate_concurrency(self, concurrency: int) -> int:
+        """验证并限制并发数量"""
+        if concurrency < 1:
+            return 1
+        elif concurrency > self.max_concurrency:
+            return self.max_concurrency
+        return concurrency 

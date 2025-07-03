@@ -17,7 +17,7 @@ class AgentConfig:
     
     # 模型相关配置
     default_model: str = "deepseek-v3:671b"
-    max_iterations: int = 30
+    max_iterations: int = 50
     max_model_retries: int = 5
     
     # 已申请支持的模型配置

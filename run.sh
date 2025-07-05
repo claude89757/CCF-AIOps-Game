@@ -62,21 +62,21 @@ else:
 echo "✅ 故障诊断完成"
 
 # 检查输出文件
-if [ -f "answer.json" ]; then
-    echo "📁 生成的答案文件: answer.json"
-    echo "📊 文件大小: $(du -h answer.json | cut -f1)"
+if [ -f "answer.jsonl" ]; then
+    echo "📁 生成的答案文件: answer.jsonl"
+    echo "📊 文件大小: $(du -h answer.jsonl | cut -f1)"
     
-    # 验证JSON格式
-    if python3 -c "import json; json.load(open('answer.json'))" 2>/dev/null; then
-        echo "✅ JSON格式验证通过"
-        echo "📈 结果数量: $(python3 -c "import json; print(len(json.load(open('answer.json'))))")"
+    # 验证JSONL格式
+    if python3 -c "import json; [json.loads(line) for line in open('answer.jsonl')]" 2>/dev/null; then
+        echo "✅ JSONL格式验证通过"
+        echo "📈 结果数量: $(wc -l < answer.jsonl)"
     else
-        echo "❌ JSON格式验证失败"
+        echo "❌ JSONL格式验证失败"
         exit 1
     fi
 else
-    echo "❌ 错误: 未生成answer.json文件"
+    echo "❌ 错误: 未生成answer.jsonl文件"
     exit 1
 fi
 
-echo "🎉 任务完成! 提交文件: answer.json" 
+echo "🎉 任务完成! 提交文件: answer.jsonl" 

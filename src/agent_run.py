@@ -42,8 +42,8 @@ def main():
                        help='模型调用最大重试次数 (默认: 5)')
     parser.add_argument('--input', default='input.json',
                        help='输入文件路径 (默认: input.json)')
-    parser.add_argument('--output', default='answer.json',
-                       help='输出文件路径 (默认: answer.json)')
+    parser.add_argument('--output', default='answer.jsonl',
+                       help='输出文件路径 (默认: answer.jsonl)')
     parser.add_argument('--debug', action='store_true',
                        help='开启调试模式')
     parser.add_argument('--context-length', type=int,
@@ -54,6 +54,12 @@ def main():
                        help='并发处理数量 (默认: 10, 设置为1表示串行处理)')
     
     args = parser.parse_args()
+    
+    # 根据输出文件扩展名自动检测输出格式
+    if args.output.endswith('.jsonl'):
+        output_format = 'jsonl'
+    else:
+        output_format = 'json'
     
     # 创建智能体，使用命令行参数配置
     agent_kwargs = {
@@ -77,6 +83,7 @@ def main():
     print(f"🔁 最大重试次数: {args.retries}")
     print(f"⚡ 并发数量: {args.concurrency}")
     print(f"🔧 处理模式: {'串行' if args.concurrency == 1 else '并行'}")
+    print(f"📄 输出格式: {output_format.upper()}")
     print(f"🐛 调试模式: {'开启' if args.debug else '关闭'}")
     print("=" * 80)
 
@@ -85,13 +92,14 @@ def main():
         input_file=args.input,
         output_file=args.output, 
         debug=args.debug,
-        use_parallel=args.concurrency > 1,
-        concurrency=args.concurrency
+        concurrency=args.concurrency,
+        output_format=output_format
     )
     
     if result["status"] == "completed":
         print(f"\n🎉 比赛提交文件已生成!")
         print(f"📁 文件位置: {result['output_file']}")
+        print(f"📄 输出格式: {result.get('output_format', 'JSON').upper()}")
         print(f"📈 成功率: {result['success_rate']:.1f}%")
         print(f"🎉 完成! 成功率: {result['success_rate']:.1f}%")
     else:

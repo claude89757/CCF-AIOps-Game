@@ -54,7 +54,8 @@ python src/agent_run.py [options]
   -r, --retries INT     模型调用最大重试次数 (默认: 5)
   -c, --concurrency INT 并发处理数量 (默认: 10, 设置为1表示串行处理)
   --input FILE          输入文件路径 (默认: input.json)
-  --output FILE         输出文件路径 (默认: answer.json)
+  --output FILE         输出文件路径 (默认: answer.jsonl)
+                        支持 .jsonl 和 .json 格式，根据文件扩展名自动检测
   --debug               开启调试模式
   --context-length INT  手动指定最大上下文长度
   --temperature FLOAT   手动指定模型温度

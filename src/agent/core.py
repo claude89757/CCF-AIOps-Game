@@ -670,16 +670,17 @@ Please start the analysis.
                 "error": str(e)
             }
     
-    def process_input_json_parallel(self, input_file: str = "input.json", output_file: str = "answer.json", 
-                                  debug: bool = False, concurrency: int = None) -> Dict[str, Any]:
+    def process_input_json_parallel(self, input_file: str = "input.json", output_file: str = "answer.jsonl", 
+                                  debug: bool = False, concurrency: int = None, output_format: str = "jsonl") -> Dict[str, Any]:
         """
-        并行处理input.json文件中的所有故障案例，生成answer.json
+        并行处理input.json文件中的所有故障案例，生成answer.jsonl或answer.json
         
         Args:
             input_file: 输入文件路径
             output_file: 输出文件路径
             debug: 是否显示调试信息
             concurrency: 并发数量，如果为None则使用实例配置
+            output_format: 输出格式，'jsonl' 或 'json'
             
         Returns:
             处理结果统计
@@ -816,12 +817,20 @@ Please start the analysis.
         # 保存结果
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(final_results, f, ensure_ascii=False, indent=2)
-            save_msg = f"结果已保存到 {output_file}"
+                if output_format.lower() == 'jsonl':
+                    # 保存为 JSONL 格式
+                    for result in final_results:
+                        json.dump(result, f, ensure_ascii=False, separators=(',', ':'))
+                        f.write('\n')
+                else:
+                    # 保存为 JSON 格式
+                    json.dump(final_results, f, ensure_ascii=False, indent=2)
+            
+            save_msg = f"结果已保存到 {output_file} (格式: {output_format.upper()})"
             if debug:
                 print(f"\n✅ {save_msg}")
             else:
-                print(f"\n✅ 已保存到 {output_file}")
+                print(f"\n✅ 已保存到 {output_file} ({output_format.upper()})")
             self.loggers['summary'].info(save_msg)
         except Exception as e:
             error_msg = f"保存结果失败: {e}"
@@ -841,6 +850,7 @@ Please start the analysis.
             "failed_cases": failed_count,
             "success_rate": successful_count / len(cases) * 100,
             "output_file": output_file,
+            "output_format": output_format,
             "processing_time": processing_time,
             "concurrency": actual_concurrency,
             "cases_per_second": len(cases) / processing_time if processing_time > 0 else 0
@@ -874,175 +884,23 @@ Please start the analysis.
         
         return summary
     
-    def process_input_json(self, input_file: str = "input.json", output_file: str = "answer.json", 
-                          debug: bool = False, use_parallel: bool = True, concurrency: int = None) -> Dict[str, Any]:
+    def process_input_json(self, input_file: str = "input.json", output_file: str = "answer.jsonl", 
+                          debug: bool = False, concurrency: int = None, output_format: str = None) -> Dict[str, Any]:
         """
-        处理input.json文件中的所有故障案例，生成answer.json
+        处理input.json文件中的所有故障案例，生成answer.jsonl或answer.json
         
         Args:
             input_file: 输入文件路径
             output_file: 输出文件路径
             debug: 是否显示调试信息
-            use_parallel: 是否使用并行处理（默认True）
-            concurrency: 并发数量（仅在use_parallel=True时有效）
+            concurrency: 并发数量，设置为1可实现串行处理效果，设置为None则使用默认配置
+            output_format: 输出格式，'jsonl' 或 'json'，如果为None则根据文件扩展名自动检测
             
         Returns:
             处理结果统计
         """
-        if use_parallel:
-            return self.process_input_json_parallel(input_file, output_file, debug, concurrency)
-        else:
-            return self._process_input_json_serial(input_file, output_file, debug)
-    
-    def _process_input_json_serial(self, input_file: str = "input.json", output_file: str = "answer.json", debug: bool = False) -> Dict[str, Any]:
-        """
-        串行处理input.json文件中的所有故障案例，生成answer.json
+        # 如果没有指定输出格式，则根据文件扩展名自动检测
+        if output_format is None:
+            output_format = 'jsonl' if output_file.endswith('.jsonl') else 'json'
         
-        Args:
-            input_file: 输入文件路径
-            output_file: 输出文件路径
-            debug: 是否显示调试信息
-            
-        Returns:
-            处理结果统计
-        """
-        print(f"🚀 开始处理故障案例")
-        if debug:
-            print(f"输入文件: {input_file}")
-            print(f"输出文件: {output_file}")
-            print("=" * 80)
-        
-        self.loggers['summary'].info("=" * 80)
-        self.loggers['summary'].info("开始处理 CCF AIOps 挑战赛故障案例")
-        self.loggers['summary'].info(f"输入文件: {input_file}")
-        self.loggers['summary'].info(f"输出文件: {output_file}")
-        self.loggers['summary'].info("=" * 80)
-        
-        # 读取输入文件
-        try:
-            with open(input_file, 'r', encoding='utf-8') as f:
-                cases = json.load(f)
-        except Exception as e:
-            error_msg = f"读取输入文件失败: {e}"
-            print(f"❌ 读取输入文件失败")
-            self.loggers['summary'].error(error_msg)
-            self.error_handler.log_error_with_context(e, "读取输入文件")
-            return {"status": "error", "error": str(e)}
-        
-        print(f"📊 共 {len(cases)} 个案例")
-        self.loggers['summary'].info(f"共发现 {len(cases)} 个故障案例")
-        
-        # 处理所有案例
-        results = []
-        successful_count = 0
-        failed_count = 0
-        
-        for i, case in enumerate(cases):
-            try:
-                if debug:
-                    print(f"\n{'='*80}")
-                    print(f"进度: {i+1}/{len(cases)} - {(i+1)/len(cases)*100:.1f}%")
-                else:
-                    print(f"处理案例 {i+1}/{len(cases)}", end=" ", flush=True)
-                
-                self.loggers['summary'].info(f"处理案例 {i+1}/{len(cases)}: {case.get('uuid', 'unknown')}")
-                
-                # 诊断单个案例
-                diagnosis_result = self.diagnose_single_case(case, debug=debug)
-                
-                if diagnosis_result["status"] == "completed" and diagnosis_result["result"]:
-                    results.append(diagnosis_result["result"])
-                    successful_count += 1
-                    success_msg = f"案例 {case['uuid']} 诊断完成"
-                    print(f"✅ {success_msg}")
-                    self.loggers['summary'].info(success_msg)
-                else:
-                    failed_count += 1
-                    fail_msg = f"案例 {case['uuid']} 诊断失败: {diagnosis_result.get('reason', '未知原因')}"
-                    print(f"❌ {fail_msg}")
-                    self.loggers['summary'].error(fail_msg)
-                    
-                    # 为失败的案例生成一个基本结果，避免丢失
-                    fallback_result = {
-                        "uuid": case["uuid"],
-                        "component": "unknown",
-                        "reason": "analysis_failed", 
-                        "time": "2025-06-06 12:00:00",
-                        "reasoning_trace": [
-                            {
-                                "step": 1,
-                                "action": "DiagnosisAttempt",
-                                "observation": "Automatic diagnosis failed, requires manual investigation"
-                            }
-                        ]
-                    }
-                    results.append(fallback_result)
-                
-            except Exception as e:
-                error_msg = f"处理案例 {case.get('uuid', 'unknown')} 时出错: {e}"
-                
-                self.loggers['summary'].error(error_msg)
-                self.loggers['interaction'].error(error_msg)  # 也记录到交互日志
-                self.error_handler.log_error_with_context(e, f"处理案例 {case.get('uuid', 'unknown')}")
-                failed_count += 1
-                
-                # 无论是否debug都记录完整异常信息到日志
-                import traceback
-                full_traceback = traceback.format_exc()
-                self.loggers['interaction'].debug(f"处理案例异常堆栈:\n{full_traceback}")
-                
-                print(f"❌ {error_msg}")
-                if debug:
-                    traceback.print_exc()
-
-        # 保存结果
-        try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(results, f, ensure_ascii=False, indent=2)
-            save_msg = f"结果已保存到 {output_file}"
-            if debug:
-                print(f"\n✅ {save_msg}")
-            else:
-                print(f"\n✅ 已保存到 {output_file}")
-            self.loggers['summary'].info(save_msg)
-        except Exception as e:
-            error_msg = f"保存结果失败: {e}"
-            if debug:
-                print(f"❌ {error_msg}")
-            else:
-                print(f"❌ 保存失败")
-            self.loggers['summary'].error(error_msg)
-            self.error_handler.log_error_with_context(e, "保存结果")
-            return {"status": "error", "error": f"保存失败: {str(e)}"}
-        
-        # 返回统计结果
-        summary = {
-            "status": "completed",
-            "total_cases": len(cases),
-            "successful_cases": successful_count,
-            "failed_cases": failed_count,
-            "success_rate": successful_count / len(cases) * 100,
-            "output_file": output_file
-        }
-        
-        if debug:
-            print(f"\n{'='*80}")
-            print(f"📊 处理完成统计:")
-            print(f"总案例数: {summary['total_cases']}")
-            print(f"成功案例: {summary['successful_cases']}")
-            print(f"失败案例: {summary['failed_cases']}")
-            print(f"成功率: {summary['success_rate']:.1f}%")
-            print(f"{'='*80}")
-        else:
-            print(f"\n📊 完成: 成功{summary['successful_cases']}/{summary['total_cases']} ({summary['success_rate']:.1f}%)")
-        
-        # 记录最终统计信息
-        self.loggers['summary'].info("=" * 80)
-        self.loggers['summary'].info("处理完成统计:")
-        self.loggers['summary'].info(f"总案例数: {summary['total_cases']}")
-        self.loggers['summary'].info(f"成功案例: {summary['successful_cases']}")
-        self.loggers['summary'].info(f"失败案例: {summary['failed_cases']}")
-        self.loggers['summary'].info(f"成功率: {summary['success_rate']:.1f}%")
-        self.loggers['summary'].info("=" * 80)
-        
-        return summary 
+        return self.process_input_json_parallel(input_file, output_file, debug, concurrency, output_format)

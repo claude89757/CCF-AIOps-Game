@@ -52,6 +52,8 @@ def main():
                        help='手动指定模型温度')
     parser.add_argument('--concurrency', '-c', type=int, default=10,
                        help='并发处理数量 (默认: 10, 设置为1表示串行处理)')
+    parser.add_argument('--limit', '-l', type=int, default=None,
+                       help='限制处理的案例数量 (默认: None, 表示处理所有案例)')
     
     args = parser.parse_args()
     
@@ -84,6 +86,7 @@ def main():
     print(f"⚡ 并发数量: {args.concurrency}")
     print(f"🔧 处理模式: {'串行' if args.concurrency == 1 else '并行'}")
     print(f"📄 输出格式: {output_format.upper()}")
+    print(f"🔢 案例限制: {'全量处理' if args.limit is None else f'限制处理前{args.limit}个案例'}")
     print(f"🐛 调试模式: {'开启' if args.debug else '关闭'}")
     print("=" * 80)
 
@@ -93,7 +96,8 @@ def main():
         output_file=args.output, 
         debug=args.debug,
         concurrency=args.concurrency,
-        output_format=output_format
+        output_format=output_format,
+        limit=args.limit
     )
     
     if result["status"] == "completed":

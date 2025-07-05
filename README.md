@@ -29,13 +29,19 @@ export BASE_URL="https://uni-api.cstcloud.cn/v1"
 ```bash
 
 # 使用命令行参数
-python src/agent_run.py --model deepseek-v3:671b --concurrency 15 --input input.json --output answer.json
+python src/agent_run.py --model deepseek-v3:671b --concurrency 15 --input input.json --output answer.jsonl
 
 # 串行处理（设置并发为1）
-python src/agent_run.py --concurrency 1 --input input.json --output answer.json
+python src/agent_run.py --concurrency 1 --input input.json --output answer.jsonl
 
 # 调试模式下的并行处理
-python src/agent_run.py --debug --concurrency 5 --input input.json --output answer.json
+python src/agent_run.py --debug --concurrency 5 --input input.json --output answer.jsonl
+
+# 限制处理前5个案例
+python src/agent_run.py --limit 5 --input input.json --output answer.jsonl
+
+# 串行处理前3个案例（用于测试）
+python src/agent_run.py --concurrency 1 --limit 3 --debug --input input.json --output answer.jsonl
 ```
 
 ### 命令行参数说明
@@ -53,9 +59,10 @@ python src/agent_run.py [options]
   -i, --iterations INT  最大迭代次数 (默认: 30)
   -r, --retries INT     模型调用最大重试次数 (默认: 5)
   -c, --concurrency INT 并发处理数量 (默认: 10, 设置为1表示串行处理)
+  -l, --limit INT       限制处理的案例数量 (默认: None, 表示处理所有案例)
   --input FILE          输入文件路径 (默认: input.json)
   --output FILE         输出文件路径 (默认: answer.jsonl)
-                        支持 .jsonl 和 .json 格式，根据文件扩展名自动检测
+                        支持 .jsonl 和 .json 格式，默认使用jsonl格式
   --debug               开启调试模式
   --context-length INT  手动指定最大上下文长度
   --temperature FLOAT   手动指定模型温度

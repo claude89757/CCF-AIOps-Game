@@ -671,7 +671,7 @@ Please start the analysis.
             }
     
     def process_input_json_parallel(self, input_file: str = "input.json", output_file: str = "answer.jsonl", 
-                                  debug: bool = False, concurrency: int = None, output_format: str = "jsonl") -> Dict[str, Any]:
+                                  debug: bool = False, concurrency: int = None, output_format: str = "jsonl", limit: int = None) -> Dict[str, Any]:
         """
         并行处理input.json文件中的所有故障案例，生成answer.jsonl或answer.json
         
@@ -681,6 +681,7 @@ Please start the analysis.
             debug: 是否显示调试信息
             concurrency: 并发数量，如果为None则使用实例配置
             output_format: 输出格式，'jsonl' 或 'json'
+            limit: 限制处理的案例数量，如果为None则处理所有案例
             
         Returns:
             处理结果统计
@@ -689,7 +690,8 @@ Please start the analysis.
         actual_concurrency = concurrency if concurrency is not None else self.concurrency
         actual_concurrency = self.config.validate_concurrency(actual_concurrency)
         
-        print(f"🚀 开始并行处理故障案例（并发数：{actual_concurrency}）")
+        limit_text = '全量处理' if limit is None else f'限制处理前{limit}个案例'
+        print(f"🚀 开始并行处理故障案例（并发数：{actual_concurrency}，{limit_text}）")
         if debug:
             print(f"输入文件: {input_file}")
             print(f"输出文件: {output_file}")
@@ -700,6 +702,7 @@ Please start the analysis.
         self.loggers['summary'].info(f"输入文件: {input_file}")
         self.loggers['summary'].info(f"输出文件: {output_file}")
         self.loggers['summary'].info(f"并发数量: {actual_concurrency}")
+        self.loggers['summary'].info(f"案例限制: {limit_text}")
         self.loggers['summary'].info("=" * 80)
         
         # 读取输入文件
@@ -713,8 +716,15 @@ Please start the analysis.
             self.error_handler.log_error_with_context(e, "读取输入文件")
             return {"status": "error", "error": str(e)}
         
-        print(f"📊 共 {len(cases)} 个案例")
-        self.loggers['summary'].info(f"共发现 {len(cases)} 个故障案例")
+        # 如果指定了限制数量，则截取前N个案例
+        if limit is not None and limit > 0:
+            original_count = len(cases)
+            cases = cases[:limit]
+            print(f"📊 共 {original_count} 个案例，限制处理前 {len(cases)} 个")
+            self.loggers['summary'].info(f"共发现 {original_count} 个故障案例，限制处理前 {len(cases)} 个")
+        else:
+            print(f"📊 共 {len(cases)} 个案例")
+            self.loggers['summary'].info(f"共发现 {len(cases)} 个故障案例")
         
         # 准备案例数据（添加索引）
         cases_with_index = [(i, case) for i, case in enumerate(cases)]
@@ -885,7 +895,7 @@ Please start the analysis.
         return summary
     
     def process_input_json(self, input_file: str = "input.json", output_file: str = "answer.jsonl", 
-                          debug: bool = False, concurrency: int = None, output_format: str = None) -> Dict[str, Any]:
+                          debug: bool = False, concurrency: int = None, output_format: str = None, limit: int = None) -> Dict[str, Any]:
         """
         处理input.json文件中的所有故障案例，生成answer.jsonl或answer.json
         
@@ -895,6 +905,7 @@ Please start the analysis.
             debug: 是否显示调试信息
             concurrency: 并发数量，设置为1可实现串行处理效果，设置为None则使用默认配置
             output_format: 输出格式，'jsonl' 或 'json'，如果为None则根据文件扩展名自动检测
+            limit: 限制处理的案例数量，如果为None则处理所有案例
             
         Returns:
             处理结果统计
@@ -903,4 +914,4 @@ Please start the analysis.
         if output_format is None:
             output_format = 'jsonl' if output_file.endswith('.jsonl') else 'json'
         
-        return self.process_input_json_parallel(input_file, output_file, debug, concurrency, output_format)
+        return self.process_input_json_parallel(input_file, output_file, debug, concurrency, output_format, limit)

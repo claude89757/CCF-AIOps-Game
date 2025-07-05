@@ -36,8 +36,8 @@ def main():
                        choices=['deepseek-v3:671b', 'qwen3:235b', 'deepseek-r1:671b-0528'],
                        default='deepseek-v3:671b',
                        help='指定使用的模型 (默认: deepseek-v3:671b)')
-    parser.add_argument('--iterations', '-i', type=int, default=30,
-                       help='最大迭代次数 (默认: 30)')
+    parser.add_argument('--iterations', '-i', type=int, default=50,
+                       help='最大迭代次数 (默认: 50)')
     parser.add_argument('--retries', '-r', type=int, default=5,
                        help='模型调用最大重试次数 (默认: 5)')
     parser.add_argument('--input', default='input.json',

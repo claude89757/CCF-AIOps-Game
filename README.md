@@ -43,7 +43,7 @@ export BASE_URL="https://uni-api.cstcloud.cn/v1"
 ```bash
 
 # 使用命令行参数
-python src/agent_run.py --model deepseek-v3:671b --concurrency 15 --input input.json --output answer.jsonl
+python src/agent_run.py --model deepseek-v3:671b --concurrency 50 --input input.json --output answer.jsonl
 
 # 串行处理（设置并发为1）
 python src/agent_run.py --concurrency 1 --input input.json --output answer.jsonl
@@ -75,7 +75,7 @@ python src/agent_run.py [options]
                         指定使用的模型 (默认: deepseek-v3:671b)
   -i, --iterations INT  最大迭代次数 (默认: 30)
   -r, --retries INT     模型调用最大重试次数 (默认: 5)
-  -c, --concurrency INT 并发处理数量 (默认: 10, 设置为1表示串行处理)
+  -c, --concurrency INT 并发处理数量 (默认: 100, 设置为1表示串行处理)
   -l, --limit INT       限制处理的案例数量 (默认: None, 表示处理所有案例)
   --input FILE          输入文件路径 (默认: input.json)
   --output FILE         输出文件路径 (默认: answer.jsonl)

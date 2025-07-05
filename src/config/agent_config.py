@@ -40,7 +40,7 @@ class AgentConfig:
     
     # 并发处理配置
     concurrency: int = 10  # 默认并发数量
-    max_concurrency: int = 20  # 最大并发数量限制
+    max_concurrency: int = 100  # 最大并发数量限制
     
     # Token管理配置 - 更严格的token限制
     max_token_limit: int = 6000  # 大幅降低工具数据最大token限制，从10000改为6000

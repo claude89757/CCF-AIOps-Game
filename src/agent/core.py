@@ -18,6 +18,12 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
+# 添加rich库导入用于动态进度条
+from rich.progress import Progress, TaskID, BarColumn, TextColumn, TimeElapsedColumn, SpinnerColumn
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+
 from ..config import AgentConfig
 from ..log_system import LoggerSetup
 from ..model import ModelClient
@@ -344,13 +350,14 @@ class AIOpsReactAgent:
         # 所有重试都失败了
         raise last_error
     
-    def diagnose_single_case(self, case: Dict[str, str], debug: bool = False) -> Dict[str, Any]:
+    def diagnose_single_case(self, case: Dict[str, str], debug: bool = False, progress_callback=None) -> Dict[str, Any]:
         """
         诊断单个故障案例
         
         Args:
             case: 故障案例，包含uuid和Anomaly Description
             debug: 是否显示调试信息
+            progress_callback: 进度更新回调函数
             
         Returns:
             诊断结果
@@ -364,9 +371,11 @@ class AIOpsReactAgent:
         # 记录诊断开始
         self._log_diagnosis_start(uuid, description)
         
-        print(f"\n🔍 开始诊断故障案例: {uuid}")
-        print(f"描述: {description}")
-        print("=" * 80)
+        # 在debug模式下才显示详细信息，否则由进度条显示
+        if debug:
+            print(f"\n🔍 开始诊断故障案例: {uuid}")
+            print(f"描述: {description}")
+            print("=" * 80)
         
         # 重置步骤计数
         self.steps = []
@@ -428,12 +437,15 @@ Please start the analysis.
                 iteration += 1
                 self.current_step += 1
                 
+                # 更新进度条
+                if progress_callback:
+                    progress_callback('iteration', iteration, self.config.max_iterations)
+                
                 self.loggers['diagnosis'].info(f"第 {iteration} 轮推理开始...")
                 
                 if debug:
                     print(f"\n🔄 第 {iteration} 轮推理...")
-                else:
-                    print(f"🔄 第{iteration}轮", end="", flush=True)
+                # 在进度条模式下不打印轮次信息，避免干扰显示
                 
                 try:
                     # 上下文管理 - 在调用模型前进行上下文长度检查和压缩
@@ -531,6 +543,9 @@ Please start the analysis.
                                 self.loggers['interaction'].info(completion_msg)  # 也记录到交互日志
                                 if debug:
                                     print("✅ 故障诊断完成!")
+                                # 更新进度条为完成状态
+                                if progress_callback:
+                                    progress_callback('completed', iteration, self.config.max_iterations)
                                 return {
                                     "status": "completed",
                                     "result": final_result,
@@ -608,10 +623,18 @@ Please start the analysis.
                 "reason": failure_reason
             }
             
+                                            # 更新进度条为失败状态
+            if progress_callback:
+                progress_callback('failed', iteration, self.config.max_iterations, failure_reason)
+            
             self.loggers['diagnosis'].warning(f"诊断未完成: {result_summary['reason']}")
             return result_summary
             
         except Exception as e:
+            # 更新进度条为异常状态
+            if progress_callback:
+                progress_callback('error', 0, self.config.max_iterations, str(e))
+                
             self.error_handler.log_error_with_context(e, "诊断单个案例", uuid, self.case_error_logger)
             return {
                 "status": "error", 
@@ -620,13 +643,14 @@ Please start the analysis.
                 "iterations": 0
             }
     
-    def _diagnose_case_with_index(self, case_with_index: Tuple[int, Dict[str, str]], debug: bool = False) -> Tuple[int, Dict[str, Any]]:
+    def _diagnose_case_with_index(self, case_with_index: Tuple[int, Dict[str, str]], debug: bool = False, progress_callback=None) -> Tuple[int, Dict[str, Any]]:
         """
         带索引的单个案例诊断方法，用于并行处理
         
         Args:
             case_with_index: (索引, 案例数据) 元组
             debug: 是否显示调试信息
+            progress_callback: 进度更新回调函数
             
         Returns:
             (索引, 诊断结果) 元组
@@ -637,12 +661,8 @@ Please start the analysis.
         thread_id = threading.current_thread().ident
         
         try:
-            # 在非debug模式下也显示开始信息
-            if not debug:
-                print(f"🔍 开始处理案例: {case.get('uuid', 'unknown')}")
-            
-            # 诊断单个案例
-            diagnosis_result = self.diagnose_single_case(case, debug=debug)
+            # 诊断单个案例，传递进度回调
+            diagnosis_result = self.diagnose_single_case(case, debug=debug, progress_callback=progress_callback)
             
             return index, {
                 "diagnosis_result": diagnosis_result,
@@ -739,7 +759,7 @@ Please start the analysis.
         progress_lock = threading.Lock()
         
         def update_progress(future):
-            """更新进度的回调函数"""
+            """更新进度的回调函数（简化版，主要负责结果处理）"""
             nonlocal completed_count, successful_count, failed_count
             
             try:
@@ -754,21 +774,17 @@ Please start the analysis.
                         results[index] = diagnosis_result["result"]
                         successful_count += 1
                         success_msg = f"案例 {case['uuid']} 诊断完成"
-                        if debug:
-                            print(f"✅ {success_msg} ({completed_count}/{len(cases)})")
-                        else:
-                            print("✅", end="", flush=True)
                         self.loggers['summary'].info(success_msg)
                     else:
                         failed_count += 1
                         fail_reason = diagnosis_result.get('reason', diagnosis_result.get('error', '未知原因'))
                         fail_msg = f"案例 {case['uuid']} 诊断失败: {fail_reason}"
-                        if debug:
-                            print(f"❌ {fail_msg} ({completed_count}/{len(cases)})")
-                        else:
-                            # 在非debug模式下也显示具体的失败原因
-                            print(f"❌ 案例 {case['uuid']} 诊断失败: {fail_reason}")
                         self.loggers['summary'].error(fail_msg)
+                        
+                        # 触发失败回调，传递失败原因
+                        case_id = case['uuid'][:8]
+                        if case_id not in failure_reasons:
+                            failure_reasons[case_id] = fail_reason
                         
                         # 为失败的案例生成一个基本结果
                         fallback_result = {
@@ -794,35 +810,286 @@ Please start the analysis.
                 try:
                     case_info = future_to_case.get(future, {})
                     case_uuid = case_info.get('uuid', 'unknown') if isinstance(case_info, dict) else 'unknown'
+                    case_id = case_uuid[:8] if case_uuid != 'unknown' else 'unknown'
+                    
+                    # 记录异常失败原因
+                    failure_reasons[case_id] = f"处理结果异常: {str(e)}"
                 except:
                     case_uuid = 'unknown'
+                    case_id = 'unknown'
+                    failure_reasons[case_id] = f"未知异常: {str(e)}"
                 
                 error_msg = f"处理案例 {case_uuid} 结果时出错: {e}"
-                print(f"❌ {error_msg}")
                 self.loggers['summary'].error(error_msg)
         
-        # 使用ThreadPoolExecutor进行并行处理
+        # 使用Rich进度条显示并发处理进度
         print(f"⚡ 开始并行处理...")
         start_time = time.time()
         
-        with ThreadPoolExecutor(max_workers=actual_concurrency) as executor:
-            # 提交所有任务
-            future_to_case = {
-                executor.submit(self._diagnose_case_with_index, case_with_index, debug): case_with_index[1]
-                for case_with_index in cases_with_index
-            }
+        # 创建进度条配置
+        console = Console()
+        
+        # 创建高级进度条管理器
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.fields[case_id]:<8}", justify="left", style="bold blue"),
+            BarColumn(
+                bar_width=None,
+                complete_style="green",
+                finished_style="bright_green"
+            ),
+            "[progress.percentage]{task.percentage:>3.1f}%",
+            "•",
+            TextColumn("{task.fields[status]:<8}", justify="center", style="bold"),
+            "•",
+            TextColumn("{task.fields[iteration]:<6}", style="dim cyan"),
+            "•",
+            TextColumn("{task.fields[speed]:<12}", style="magenta"),
+            "•",
+            TextColumn("{task.fields[eta]:<8}", style="yellow"),
+            TimeElapsedColumn(),
+            console=console,
+            expand=True
+        )
+        
+        # 为每个案例创建进度条
+        task_ids = {}
+        progress_callbacks = {}
+        task_start_times = {}
+        failure_reasons = {}  # 收集失败原因
+        
+        with progress:
+            # 添加总体进度统计任务
+            overall_task_id = progress.add_task(
+                "总体进度",
+                total=len(cases),
+                case_id="[bold green]总体",
+                status="📊 准备中",
+                iteration=f"0/{len(cases)}",
+                speed="0案例/分钟",
+                eta="计算中"
+            )
             
-            # 添加回调函数处理结果
-            for future in future_to_case:
-                future.add_done_callback(update_progress)
+            # 为每个案例创建进度条
+            for i, case in enumerate(cases):
+                case_id = case['uuid'][:8]  # 使用UUID前8位作为显示ID
+                task_id = progress.add_task(
+                    f"案例-{case_id}",
+                    total=self.config.max_iterations,
+                    case_id=case_id,
+                    status="⏳ 等待中",
+                    iteration=f"0/{self.config.max_iterations}",
+                    speed="0轮/分钟",
+                    eta="--"
+                )
+                task_ids[i] = task_id
+                task_start_times[i] = None
+                
+                # 创建每个任务的进度回调函数
+                def make_callback(task_id, case_id, task_index):
+                    def callback(event_type, current, total, reason=None):
+                        nonlocal task_start_times, overall_task_id, failure_reasons
+                        
+                        # 记录开始时间
+                        if event_type == 'iteration' and current == 1 and task_start_times[task_index] is None:
+                            task_start_times[task_index] = time.time()
+                        
+                        # 计算速度和ETA
+                        if task_start_times[task_index] and current > 0:
+                            elapsed = time.time() - task_start_times[task_index]
+                            speed = (current / elapsed) * 60 if elapsed > 0 else 0
+                            speed_text = f"{speed:.1f}轮/分钟"
+                            
+                            # 计算ETA
+                            if speed > 0:
+                                remaining_iterations = total - current
+                                eta_minutes = remaining_iterations / speed
+                                if eta_minutes < 1:
+                                    eta_text = f"{int(eta_minutes * 60)}秒"
+                                else:
+                                    eta_text = f"{int(eta_minutes)}分钟"
+                            else:
+                                eta_text = "--"
+                        else:
+                            speed_text = "0轮/分钟"
+                            eta_text = "--"
+                        
+                        if event_type == 'iteration':
+                            progress.update(
+                                task_id,
+                                completed=current,
+                                status="🔄 处理中",
+                                iteration=f"{current}/{total}",
+                                speed=speed_text,
+                                eta=eta_text
+                            )
+                        elif event_type == 'completed':
+                            progress.update(
+                                task_id,
+                                completed=total,
+                                status="✅ 完成",
+                                iteration=f"{current}/{total}",
+                                speed=speed_text,
+                                eta="已完成"
+                            )
+                            # 更新总体进度
+                            with progress_lock:
+                                overall_elapsed = time.time() - start_time
+                                overall_speed = (successful_count + failed_count) / (overall_elapsed / 60) if overall_elapsed > 0 else 0
+                                overall_remaining = len(cases) - (successful_count + failed_count)
+                                overall_eta = f"{int(overall_remaining / overall_speed)}分钟" if overall_speed > 0 and overall_remaining > 0 else "即将完成"
+                                progress.update(
+                                    overall_task_id,
+                                    completed=successful_count + failed_count,
+                                    status=f"📊 {successful_count}✅ {failed_count}❌",
+                                    iteration=f"{successful_count + failed_count}/{len(cases)}",
+                                    speed=f"{overall_speed:.1f}案例/分钟",
+                                    eta=overall_eta
+                                )
+                        elif event_type == 'failed':
+                            # 收集失败原因
+                            failure_reason = reason or "未知失败原因"
+                            failure_reasons[case_id] = failure_reason
+                            
+                            progress.update(
+                                task_id,
+                                completed=total,
+                                status="❌ 失败",
+                                iteration=f"{current}/{total}",
+                                speed=speed_text,
+                                eta="已终止"
+                            )
+                            # 更新总体进度
+                            with progress_lock:
+                                overall_elapsed = time.time() - start_time
+                                overall_speed = (successful_count + failed_count) / (overall_elapsed / 60) if overall_elapsed > 0 else 0
+                                overall_remaining = len(cases) - (successful_count + failed_count)
+                                overall_eta = f"{int(overall_remaining / overall_speed)}分钟" if overall_speed > 0 and overall_remaining > 0 else "即将完成"
+                                progress.update(
+                                    overall_task_id,
+                                    completed=successful_count + failed_count,
+                                    status=f"📊 {successful_count}✅ {failed_count}❌",
+                                    iteration=f"{successful_count + failed_count}/{len(cases)}",
+                                    speed=f"{overall_speed:.1f}案例/分钟",
+                                    eta=overall_eta
+                                )
+                        elif event_type == 'error':
+                            # 收集异常原因
+                            error_reason = reason or "未知异常"
+                            failure_reasons[case_id] = f"异常: {error_reason}"
+                            
+                            progress.update(
+                                task_id,
+                                completed=total,
+                                status="⚠️ 异常",
+                                iteration=f"0/{total}",
+                                speed="0轮/分钟",
+                                eta="异常终止"
+                            )
+                            # 更新总体进度
+                            with progress_lock:
+                                overall_elapsed = time.time() - start_time
+                                overall_speed = (successful_count + failed_count) / (overall_elapsed / 60) if overall_elapsed > 0 else 0
+                                overall_remaining = len(cases) - (successful_count + failed_count)
+                                overall_eta = f"{int(overall_remaining / overall_speed)}分钟" if overall_speed > 0 and overall_remaining > 0 else "即将完成"
+                                progress.update(
+                                    overall_task_id,
+                                    completed=successful_count + failed_count,
+                                    status=f"📊 {successful_count}✅ {failed_count}❌",
+                                    iteration=f"{successful_count + failed_count}/{len(cases)}",
+                                    speed=f"{overall_speed:.1f}案例/分钟",
+                                    eta=overall_eta
+                                )
+                    return callback
+                
+                progress_callbacks[i] = make_callback(task_id, case_id, i)
             
-            # 等待所有任务完成
-            concurrent.futures.wait(future_to_case)
+            # 使用ThreadPoolExecutor进行并行处理
+            with ThreadPoolExecutor(max_workers=actual_concurrency) as executor:
+                # 提交所有任务，传递对应的进度回调
+                future_to_case = {}
+                for case_with_index in cases_with_index:
+                    index = case_with_index[0]
+                    callback = progress_callbacks[index]
+                    future = executor.submit(self._diagnose_case_with_index, case_with_index, debug, callback)
+                    future_to_case[future] = case_with_index[1]
+                
+                # 添加回调函数处理结果（简化版，不重复打印）
+                for future in future_to_case:
+                    future.add_done_callback(update_progress)
+                
+                # 等待所有任务完成
+                concurrent.futures.wait(future_to_case)
         
         processing_time = time.time() - start_time
         
         # 过滤掉None结果
         final_results = [result for result in results if result is not None]
+        
+        # 使用Rich显示最终统计结果
+        console.print("\n" + "="*80)
+        
+        # 创建统计表格
+        stats_table = Table(title="📊 处理统计", show_header=True, header_style="bold magenta")
+        stats_table.add_column("指标", style="cyan", justify="left")
+        stats_table.add_column("数值", style="green", justify="right")
+        
+        success_rate = successful_count / len(cases) * 100
+        speed = len(cases) / processing_time * 60 if processing_time > 0 else 0
+        
+        stats_table.add_row("总案例数", str(len(cases)))
+        stats_table.add_row("成功案例", f"{successful_count} ✅")
+        stats_table.add_row("失败案例", f"{failed_count} ❌")
+        stats_table.add_row("成功率", f"{success_rate:.1f}%")
+        stats_table.add_row("总用时", f"{processing_time:.1f}秒")
+        stats_table.add_row("平均速度", f"{speed:.1f}案例/分钟")
+        stats_table.add_row("并发数", str(actual_concurrency))
+        
+        console.print(stats_table)
+        
+        # 如果有失败案例，显示失败原因汇总
+        if failure_reasons:
+            console.print("\n")
+            failure_table = Table(title="❌ 失败案例详情", show_header=True, header_style="bold red")
+            failure_table.add_column("案例ID", style="yellow", justify="left")
+            failure_table.add_column("失败原因", style="red", justify="left")
+            
+            for case_id, reason in failure_reasons.items():
+                failure_table.add_row(case_id, reason)
+            
+            console.print(failure_table)
+            
+            # 失败原因分类统计
+            reason_stats = {}
+            for reason in failure_reasons.values():
+                # 简化失败原因分类
+                if "达到最大迭代次数" in reason:
+                    category = "达到最大迭代次数"
+                elif "API" in reason and "失败" in reason:
+                    category = "API调用失败"
+                elif "异常" in reason:
+                    category = "程序异常"
+                elif "未检测到工具调用" in reason:
+                    category = "工具调用失败"
+                else:
+                    category = "其他原因"
+                
+                reason_stats[category] = reason_stats.get(category, 0) + 1
+            
+            if len(reason_stats) > 1:  # 只有在有多种失败原因时才显示分类统计
+                console.print("\n")
+                category_table = Table(title="📊 失败原因分类统计", show_header=True, header_style="bold yellow")
+                category_table.add_column("失败类型", style="cyan", justify="left")
+                category_table.add_column("案例数", style="red", justify="right")
+                category_table.add_column("占比", style="magenta", justify="right")
+                
+                for category, count in sorted(reason_stats.items(), key=lambda x: x[1], reverse=True):
+                    percentage = (count / failed_count) * 100
+                    category_table.add_row(category, str(count), f"{percentage:.1f}%")
+                
+                console.print(category_table)
+        
+        console.print("="*80 + "\n")
         
         # 保存结果
         try:
@@ -837,10 +1104,7 @@ Please start the analysis.
                     json.dump(final_results, f, ensure_ascii=False, indent=2)
             
             save_msg = f"结果已保存到 {output_file} (格式: {output_format.upper()})"
-            if debug:
-                print(f"\n✅ {save_msg}")
-            else:
-                print(f"\n✅ 已保存到 {output_file} ({output_format.upper()})")
+            console.print(f"✅ [bold green]结果已保存到 {output_file} ({output_format.upper()})[/bold green]")
             self.loggers['summary'].info(save_msg)
         except Exception as e:
             error_msg = f"保存结果失败: {e}"

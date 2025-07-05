@@ -10,6 +10,20 @@
 - ✅ **容器化部署**: Docker支持，符合比赛提交要求
 - ✅ **批量处理**: 自动处理N个故障案例
 
+## 🎯 新功能特性
+
+### 📊 高级进度条显示
+- ✅ **实时进度跟踪**: 每个案例独立进度条，显示处理轮次和速度
+- ✅ **总体进度统计**: 顶部显示整体进度和成功/失败统计
+- ✅ **智能ETA预估**: 基于当前速度预估剩余完成时间
+- ✅ **彩色状态指示**: 🔄 处理中、✅ 完成、❌ 失败、⚠️ 异常
+- ✅ **失败原因收集**: 自动收集并分类展示失败原因
+
+### 📈 处理报告
+- ✅ **详细统计表格**: 成功率、处理速度、总用时等关键指标
+- ✅ **失败案例详情**: 列出每个失败案例的具体原因
+- ✅ **失败原因分类**: 按失败类型统计分析（如API失败、迭代耗尽等）
+
 ## 🚀 快速使用
 
 ### 环境准备
@@ -42,6 +56,9 @@ python src/agent_run.py --limit 5 --input input.json --output answer.jsonl
 
 # 串行处理前3个案例（用于测试）
 python src/agent_run.py --concurrency 1 --limit 3 --debug --input input.json --output answer.jsonl
+
+# 测试失败原因收集（使用低迭代次数）
+python src/agent_run.py --limit 5 --iterations 3 --input input.json --output answer.jsonl
 ```
 
 ### 命令行参数说明

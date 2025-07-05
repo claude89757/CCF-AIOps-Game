@@ -60,3 +60,7 @@ python src/agent_run.py [options]
   --context-length INT  手动指定最大上下文长度
   --temperature FLOAT   手动指定模型温度
 ```
+
+### 提交和验证结果
+
+请使用`submit_tool`
